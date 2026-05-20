@@ -120,29 +120,43 @@ elif [ "$distro" = "gentoo" ]; then
     exit 1
   fi
   
-  # Use OpenRC stage3 (systemd not recommended for shimboot due to ChromeOS kernel issues)
-  # Stage3 OpenRC is more compatible with the shimboot bootloader approach
-  stage3_url="https://distfiles.gentoo.org/releases/$gentoo_arch/autobuilds/latest-stage3-openrc.txt"
+  # New URL format for Gentoo autobuilds directory
+  # Gentoo now uses "current-stage3-<arch>-openrc" directories
+  stage3_base_url="https://distfiles.gentoo.org/releases/$gentoo_arch/autobuilds"
   
-  print_info "fetching stage3 tarball location"
-  stage3_file=$(wget -qO- "$stage3_url" | grep -v "^#" | head -n1 | cut -d' ' -f1)
+  # Fetch the directory listing and find the latest tarball
+  print_info "Fetching stage3 tarball list from Gentoo mirrors..."
+  local stage3_dir="$stage3_base_url/current-stage3-${gentoo_arch}-openrc"
+  
+  local stage3_html="/tmp/gentoo-stage3-list.html"
+  wget -q --show-progress "$stage3_dir/" -O "$stage3_html" 2>&1 | tail -3
+  
+  # Extract the tarball filename - find the latest .tar.xz file (not .asc)
+  local stage3_file=$(grep -oE 'stage3-[^"]+\.tar\.xz' "$stage3_html" | grep -v '\.asc' | head -1)
+  
   if [ -z "$stage3_file" ]; then
-    print_error "Failed to fetch stage3 location from Gentoo mirrors"
+    print_error "Failed to find stage3 tarball in directory listing"
+    cat "$stage3_html" | grep -i "tar"
+    rm -f "$stage3_html"
     exit 1
   fi
-  stage3_full_url="https://distfiles.gentoo.org/releases/$gentoo_arch/autobuilds/${stage3_file}"
   
-  print_info "downloading stage3 tarball: $stage3_file"
+  local stage3_full_url="${stage3_dir}/${stage3_file}"
+  
+  print_info "Found stage3 tarball: $stage3_file"
+  print_info "Downloading from: $stage3_full_url"
+  
   stage3_tarball="/tmp/stage3-${gentoo_arch}.tar.xz"
   if [ ! -f "$stage3_tarball" ]; then
     wget -q --show-progress "$stage3_full_url" -O "$stage3_tarball"
   fi
   
-  print_info "extracting stage3 tarball (this may take a while)"
+  print_info "Extracting stage3 tarball (this may take a while)"
   tar xpvf "$stage3_tarball" --xattrs-include='*/*' --numeric-owner -C "$rootfs_dir" 2>&1 | tail -20
   
-  # Clean up stage3 tarball
+  # Clean up
   rm -f "$stage3_tarball"
+  rm -f "$stage3_html"
   
   chroot_script="/opt/setup_rootfs_gentoo.sh"
 
