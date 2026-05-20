@@ -159,6 +159,8 @@ x11-misc/lightdm elogind
 x11-drivers/xf86-input-libinput udev
 x11-base/xorg-server udev
 media-libs/mesa X
+# lightdm-gtk-greeter pulls GTK/Pango/Librsvg binpkgs that require freetype[harfbuzz,png]
+media-libs/freetype harfbuzz png
 USEEOF
 
 # Helper that installs packages through the binhost-aware Portage config.
