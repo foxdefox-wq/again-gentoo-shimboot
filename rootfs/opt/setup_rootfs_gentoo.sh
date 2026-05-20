@@ -161,6 +161,8 @@ x11-base/xorg-server udev
 media-libs/mesa X
 # lightdm-gtk-greeter pulls GTK/Pango/Librsvg binpkgs that require freetype[harfbuzz,png]
 media-libs/freetype harfbuzz png
+# xfce4-pulseaudio-plugin pulls xfce4-panel[dbusmenu], which needs libdbusmenu[gtk3]
+dev-libs/libdbusmenu gtk3
 USEEOF
 
 # Helper that installs packages through the binhost-aware Portage config.
