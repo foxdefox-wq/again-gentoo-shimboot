@@ -122,17 +122,15 @@ elif [ "$distro" = "gentoo" ]; then
   
   # New URL format for Gentoo autobuilds directory
   # Gentoo now uses "current-stage3-<arch>-openrc" directories
-  stage3_base_url="https://distfiles.gentoo.org/releases/$gentoo_arch/autobuilds"
+  stage3_dir="https://distfiles.gentoo.org/releases/$gentoo_arch/autobuilds/current-stage3-${gentoo_arch}-openrc"
   
   # Fetch the directory listing and find the latest tarball
   print_info "Fetching stage3 tarball list from Gentoo mirrors..."
-  local stage3_dir="$stage3_base_url/current-stage3-${gentoo_arch}-openrc"
-  
-  local stage3_html="/tmp/gentoo-stage3-list.html"
+  stage3_html="/tmp/gentoo-stage3-list.html"
   wget -q --show-progress "$stage3_dir/" -O "$stage3_html" 2>&1 | tail -3
   
   # Extract the tarball filename - find the latest .tar.xz file (not .asc)
-  local stage3_file=$(grep -oE 'stage3-[^"]+\.tar\.xz' "$stage3_html" | grep -v '\.asc' | head -1)
+  stage3_file=$(grep -oE 'stage3-[^"]+\.tar\.xz' "$stage3_html" | grep -v '\.asc' | head -1)
   
   if [ -z "$stage3_file" ]; then
     print_error "Failed to find stage3 tarball in directory listing"
@@ -141,7 +139,7 @@ elif [ "$distro" = "gentoo" ]; then
     exit 1
   fi
   
-  local stage3_full_url="${stage3_dir}/${stage3_file}"
+  stage3_full_url="${stage3_dir}/${stage3_file}"
   
   print_info "Found stage3 tarball: $stage3_file"
   print_info "Downloading from: $stage3_full_url"
