@@ -4,16 +4,12 @@ Shimboot is a collection of scripts for patching a Chrome OS RMA shim to serve a
 
 This fork is based on the original [shimboot](https://github.com/ading2210/shimboot) project by ading2210.
 
-| <img src="/website/assets/shimboot_demo_1.jpg" alt="Shimboot on Chromebook" width="400"/> | <img src="/website/assets/shimboot_demo_2.jpg" alt="Shimboot on Chromebook" width="400"/> |  
-| ----- | ----- |
-| Shimboot on HP Chromebook | Shimboot on Acer Chromebook |
-
 ## Features
 
 - **Run Gentoo Linux** on a Chromebook via RMA shim
 - **Does not modify the firmware** - safe for enterprise enrolled devices
 - **OpenRC init system** - better compatibility with ChromeOS kernel
-- **XFCE Desktop** with LightDM (as default)
+- **XFCE Desktop** with LightDM (default)
 - **Optional encryption** with LUKS2
 - **Multiple architectures** - x86_64 and ARM64 supported
 
@@ -144,21 +140,21 @@ sudo ./build_complete.sh corsola distro=gentoo arch=arm64
 
 This fork supports the following distributions:
 
-- **Gentoo Linux** (OpenRC) - New! This fork's primary focus
+- **Gentoo Linux** (OpenRC) - Primary focus of this fork
 - Debian 12 (Bookworm)
 - Debian 13 (Trixie)
 - Debian Unstable (Sid)
 - Alpine Linux
 
 ```bash
-# Debian (default)
+# Gentoo (this fork's default)
+sudo ./build_complete.sh dedede distro=gentoo
+
+# Debian (default upstream)
 sudo ./build_complete.sh dedede
 
 # Alpine
 sudo ./build_complete.sh dedede distro=alpine
-
-# Gentoo
-sudo ./build_complete.sh dedede distro=gentoo
 ```
 
 ## FAQ

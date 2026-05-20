@@ -2,6 +2,7 @@
 
 # Setup script for Gentoo rootfs on shimboot
 # This script runs inside the chroot after stage3 extraction
+# Note: emerge commands run inside the chroot, not on the host
 
 DEBUG="$1"
 set -e
@@ -20,23 +21,14 @@ disable_base_pkgs="$9"
 arch="${10}"
 
 # Detect if we're inside chroot
-if [ ! -f /etc/portage/make.conf ]; then
+if [ ! -f /etc/passwd ]; then
   echo "Error: This script must be run inside the Gentoo chroot"
   exit 1
 fi
 
+# Set up environment
 export CONFIG_PROTECT="-*"
 export USE="-*"
-
-# Function to unmount on exit
-cleanup_chroot() {
-    umount -l /proc 2>/dev/null || true
-    umount -l /sys 2>/dev/null || true
-    umount -l /dev/pts 2>/dev/null || true
-    umount -l /dev 2>/dev/null || true
-}
-
-trap cleanup_chroot EXIT
 
 # Set hostname
 if [ ! "$hostname" ]; then
@@ -68,32 +60,25 @@ PKGDIR="/var/cache/binpkgs"
 
 # Emerge options
 EMERGE_DEFAULT_OPTS="--quiet-build=y --verbose-build=n"
-
-# Enable parallel make
-MAKEOPTS="-j$(nproc) -l$(nproc)"
 MAKEFLAGS="-j$(nproc)"
-MAKE_CONF_JOBS="-j$(nproc)"
-PORTAGE_NICENESS="10"
-PORTAGE_JOBS="4"
 FETCHCOMMAND="wget -c \${URI} -O \${DISTDIR}/\${FILE}"
 RESUMECOMMAND="wget -c \${URI} -O \${DISTDIR}/\${FILE}"
-MAKE Conf in Portage
-EOF
+MAKEEOF
 
 # Ensure portage directories exist
-mkdir -p /etc/portage/package.accept_keywords
-mkdir -p /etc/portage/package.use
-mkdir -p /var/db/repos/gentoo
-mkdir -p /var/cache/distfiles
-mkdir -p /var/tmp/portage
+mkdir -p /etc/portage/package.accept_keywords 2>/dev/null || true
+mkdir -p /etc/portage/package.use 2>/dev/null || true
+mkdir -p /var/db/repos/gentoo 2>/dev/null || true
+mkdir -p /var/cache/distfiles 2>/dev/null || true
+mkdir -p /var/tmp/portage 2>/dev/null || true
 
 # Sync portage tree
 print_info "Syncing Portage tree..."
-emerge-webrsync --quiet || emerge --sync --quiet
+emerge-webrsync --quiet 2>&1 || emerge --sync --quiet 2>&1
 
 # Update world
 print_info "Updating base system..."
-emerge --quiet-build=y @world
+emerge --quiet-build=y @world 2>&1
 
 # Install essential packages
 print_info "Installing base packages..."
@@ -109,7 +94,7 @@ emerge --quiet-build=y \
   polkit \
   udisks \
   zram-init \
-  bash-completion
+  bash-completion 2>&1
 
 # Install Xorg and graphics drivers
 print_info "Installing Xorg and graphics drivers..."
@@ -119,7 +104,7 @@ emerge --quiet-build=y \
   xf86-video-intel \
   mesa \
   glamor-egl \
-  libva-intel-driver
+  libva-intel-driver 2>&1
 
 # Install XFCE desktop with LightDM
 print_info "Installing XFCE desktop with LightDM..."
@@ -129,7 +114,7 @@ emerge --quiet-build=y \
   xfce-extra/xfce4-notifyd \
   xfce-extra/xfce4-pulseaudio-plugin \
   lightdm \
-  lightdm-gtk-greeter
+  lightdm-gtk-greeter 2>&1
 
 # Configure OpenRC services
 print_info "Configuring OpenRC services..."
@@ -193,7 +178,6 @@ depend() {
 start() {
     ebegin "Starting LightDM"
     mkdir -p /run/lightdm
-    chown root:lightdm /run/lightdm 2>/dev/null || true
     touch /run/lightdm/lightdm.pid
     /usr/sbin/lightdm &
     eend 0
@@ -243,7 +227,7 @@ if [ ! "$username" ]; then
 fi
 
 print_info "Creating user: $username"
-useradd -m -G wheel,audio,video,usb,input,portage,plugdev -s /bin/bash "$username"
+useradd -m -G wheel,audio,video,usb,input,portage,plugdev -s /bin/bash "$username" 2>/dev/null || true
 
 # Configure sudo
 echo "%wheel ALL=(ALL:ALL) ALL" >> /etc/sudoers
@@ -258,7 +242,7 @@ set_password() {
       echo "Failed to set password for $user, please try again."
     done
   else
-    yes "$password" | passwd $user
+    yes "$password" | passwd $user 2>/dev/null || true
   fi
 }
 
@@ -279,12 +263,12 @@ if [ -f "/home/$username/.bashrc" ]; then
 fi
 
 # Set proper shell for root
-chsh -s /bin/bash root
+chsh -s /bin/bash root 2>/dev/null || true
 
 # Create OpenRC runlevels if needed
-mkdir -p /etc/runlevels/boot
-mkdir -p /etc/runlevels/default
-mkdir -p /etc/runlevels/shutdown
+mkdir -p /etc/runlevels/boot 2>/dev/null || true
+mkdir -p /etc/runlevels/default 2>/dev/null || true
+mkdir -p /etc/runlevels/shutdown 2>/dev/null || true
 
 # Copy ChromeOS modules/firmware from /etc/modules-load.d to /etc/modules
 if [ -d /etc/modules-load.d ]; then

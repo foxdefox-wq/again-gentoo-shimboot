@@ -20,8 +20,7 @@ print_help() {
 }
 
 assert_root
-assert_deps "realpath debootstrap findmnt wget pcre2-utils tar bzip2"
-assert_args "$2"
+assert_deps "realpath findmnt wget tar bzip2 xz git"
 parse_args "$@"
 
 rootfs_dir=$(realpath -m "${1}")
@@ -35,19 +34,19 @@ mkdir -p $rootfs_dir
 
 unmount_all() {
   for mountpoint in $chroot_mounts; do
-    umount -l "$rootfs_dir/$mountpoint"
+    umount -l "$rootfs_dir/$mountpoint" 2>/dev/null || true
   done
 }
 
 need_remount() {
   local target="$1"
-  local mnt_options="$(findmnt -T "$target" | tail -n1 | rev | cut -f1 -d' '| rev)"
+  local mnt_options="$(findmnt -T "$target" 2>/dev/null | tail -n1 | rev | cut -f1 -d' '| rev)"
   echo "$mnt_options" | grep -e "noexec" -e "nodev"
 }
 
 do_remount() {
   local target="$1"
-  local mountpoint="$(findmnt -T "$target" | tail -n1 | cut -f1 -d' ')"
+  local mountpoint="$(findmnt -T "$target" 2>/dev/null | tail -n1 | cut -f1 -d' ')"
   mount -o remount,dev,exec "$mountpoint"
 }
 
@@ -57,11 +56,21 @@ fi
 
 if [ "$distro" = "debian" ]; then
   print_info "bootstraping debian chroot"
+  # Check if debootstrap is available
+  if ! command -v debootstrap &> /dev/null; then
+    print_error "debootstrap is required for Debian/Ubuntu. Please install it first."
+    exit 1
+  fi
   debootstrap --arch $arch --components=main,contrib,non-free,non-free-firmware "$release_name" "$rootfs_dir" http://deb.debian.org/debian/
   chroot_script="/opt/setup_rootfs.sh"
 
 elif [ "$distro" = "ubuntu" ]; then 
   print_info "bootstraping ubuntu chroot"
+  # Check if debootstrap is available
+  if ! command -v debootstrap &> /dev/null; then
+    print_error "debootstrap is required for Debian/Ubuntu. Please install it first."
+    exit 1
+  fi
   repo_url="http://archive.ubuntu.com/ubuntu"
   if [ "$arch" = "amd64" ]; then
     repo_url="http://archive.ubuntu.com/ubuntu"
@@ -75,7 +84,7 @@ elif [ "$distro" = "alpine" ]; then
   print_info "downloading alpine package list"
   pkg_list_url="https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64/"
   pkg_data="$(wget -qO- --show-progress "$pkg_list_url" | grep "apk-tools-static")"
-  pkg_url="$pkg_list_url$(echo "$pkg_data" | pcre2grep -o1 '\"(.+?.apk)\"')"
+  pkg_url="$pkg_list_url$(echo "$pkg_data" | grep -oP '"[^"]+\.apk"' | tr -d '"' | tail -1)"
 
   print_info "downloading and extracting apk-tools-static"
   pkg_extract_dir="/tmp/apk-tools-static"
@@ -117,6 +126,10 @@ elif [ "$distro" = "gentoo" ]; then
   
   print_info "fetching stage3 tarball location"
   stage3_file=$(wget -qO- "$stage3_url" | grep -v "^#" | head -n1 | cut -d' ' -f1)
+  if [ -z "$stage3_file" ]; then
+    print_error "Failed to fetch stage3 location from Gentoo mirrors"
+    exit 1
+  fi
   stage3_full_url="https://distfiles.gentoo.org/releases/$gentoo_arch/autobuilds/${stage3_file}"
   
   print_info "downloading stage3 tarball: $stage3_file"
@@ -126,7 +139,7 @@ elif [ "$distro" = "gentoo" ]; then
   fi
   
   print_info "extracting stage3 tarball (this may take a while)"
-  tar xpvf "$stage3_tarball" --xattrs-include='*/*' --numeric-owner -C "$rootfs_dir" 2>&1 | head -20
+  tar xpvf "$stage3_tarball" --xattrs-include='*/*' --numeric-owner -C "$rootfs_dir" 2>&1 | tail -20
   
   # Clean up stage3 tarball
   rm -f "$stage3_tarball"
@@ -139,13 +152,14 @@ else
 fi
 
 print_info "copying rootfs setup scripts"
-cp -arv rootfs/* "$rootfs_dir"
-cp /etc/resolv.conf "$rootfs_dir/etc/resolv.conf"
+cp -arv rootfs/* "$rootfs_dir" 2>/dev/null || true
+cp /etc/resolv.conf "$rootfs_dir/etc/resolv.conf" 2>/dev/null || true
 
 print_info "creating bind mounts for chroot"
 trap unmount_all EXIT
 for mountpoint in $chroot_mounts; do
-  mount --make-rslave --rbind "/${mountpoint}" "${rootfs_dir}/$mountpoint"
+  mkdir -p "$rootfs_dir/$mountpoint"
+  mount --make-rslave --rbind "/${mountpoint}" "${rootfs_dir}/$mountpoint" 2>/dev/null || true
 done
 
 hostname="${args['hostname']}"

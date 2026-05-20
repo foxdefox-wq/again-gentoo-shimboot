@@ -99,18 +99,37 @@ elif [ "$kernel_arch" = "aarch64" ]; then
   host_arch="arm64"
 fi
 
-needed_deps="wget python3 unzip zip git cpio binwalk pcre2grep cgpt mkfs.ext4 mkfs.ext2 fdisk depmod findmnt lz4 pv cryptsetup bzip2 xz"
-if [ "$distro" = "gentoo" ]; then
-  needed_deps="$needed_deps emerge git"
-fi
+# Host system dependencies (commands that need to exist on the build machine)
+# Note: emerge is NOT needed on the host - it's the Gentoo package manager that runs inside the chroot
+needed_commands="wget python3 unzip zip git cpio binwalk pcre2grep cgpt fdisk findmnt lz4 pv cryptsetup bzip2 xz"
 
-if [ "$(check_deps "$needed_deps")" ]; then
+if [ "$(check_deps "$needed_commands")" ]; then
   #install deps automatically on debian and ubuntu
   if [ -f "/etc/debian_version" ]; then
     print_title "attempting to install build deps"
-    apt-get install wget python3 unzip zip cpio binwalk pcre2-utils cgpt kmod pv lz4 cryptsetup bzip2 xz-utils git debootstrap -y
+    # Install packages (some packages provide multiple commands)
+    apt-get install -y \
+      wget \
+      python3 \
+      unzip \
+      zip \
+      git \
+      cpio \
+      binwalk \
+      pcre2-utils \
+      vboot-utils \
+      e2fsprogs \
+      fdisk \
+      findmnt \
+      lz4 \
+      pv \
+      cryptsetup \
+      bzip2 \
+      xz-utils \
+      numfmt \
+      curl
   fi
-  assert_deps "$needed_deps"
+  assert_deps "$needed_commands"
 fi
 
 #install qemu-user-static on debian if needed
@@ -289,16 +308,30 @@ if [ ! "$rootfs_dir" ]; then
   if [ "$distro" = "debian" ]; then
     release="${release:-bookworm}"
     desktop_package="task-$desktop-desktop"
+    # Install debootstrap for Debian-based distros
+    if [ -f "/etc/debian_version" ] && ! command -v debootstrap &> /dev/null; then
+      apt-get install -y debootstrap
+    fi
   elif [ "$distro" = "ubuntu" ]; then
     release="${release:-noble}"
     desktop_package="task-$desktop-desktop"
+    # Install debootstrap for Debian-based distros
+    if [ -f "/etc/debian_version" ] && ! command -v debootstrap &> /dev/null; then
+      apt-get install -y debootstrap
+    fi
   elif [ "$distro" = "alpine" ]; then
     release="${release:-edge}"
     desktop_package="xfce4 xfce4-terminal thunar lightdm-gtk-greeter"
+    # Alpine doesn't need debootstrap
   elif [ "$distro" = "gentoo" ]; then
     release="current"
     # Gentoo always uses XFCE with LightDM as per user's requirement
     desktop_package="xfce xfce-extra/xfce4-goodies lightdm lightdm-gtk-greeter"
+    # Gentoo doesn't need debootstrap - it uses stage3 tarballs
+    # But we do need git for emerge-webrsync
+    if ! command -v git &> /dev/null; then
+      apt-get install -y git
+    fi
   else
     print_error "invalid distro selection"
     exit 1
@@ -306,10 +339,16 @@ if [ ! "$rootfs_dir" ]; then
 
   #install a newer debootstrap version if needed
   if [ -f "/etc/debian_version" ] && [ "$distro" = "ubuntu" -o "$distro" = "debian" ]; then
+    if ! command -v debootstrap &> /dev/null; then
+      apt-get install -y debootstrap
+    fi
     if [ ! -f "/usr/share/debootstrap/scripts/$release" ]; then
       print_info "installing newer debootstrap version"
       mirror_url="https://deb.debian.org/debian/pool/main/d/debootstrap/"
-      deb_file="$(curl "https://deb.debian.org/debian/pool/main/d/debootstrap/" | pcre2grep -o1 'href="(debootstrap_.+?\.deb)"' | tail -n1)"
+      deb_file="$(curl "https://deb.debian.org/debian/pool/main/d/debootstrap/" | grep -oP 'href="debootstrap_[^"]+\.deb"' | head -1 | cut -d'"' -f2)"
+      if [ -z "$deb_file" ]; then
+        deb_file="$(curl "https://deb.debian.org/debian/pool/main/d/debootstrap/" | pcre2grep -o1 'href="(debootstrap_.+?\.deb)"' | tail -n1)"
+      fi
       deb_url="${mirror_url}${deb_file}"
       wget -q --show-progress "$deb_url" -O "/tmp/$deb_file"
       apt-get install -y "/tmp/$deb_file"
