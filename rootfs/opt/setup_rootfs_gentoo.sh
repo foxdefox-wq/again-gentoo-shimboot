@@ -20,9 +20,24 @@ enable_root="$8"
 disable_base_pkgs="$9"
 arch="${10}"
 
+# Define print functions (common.sh not available inside chroot)
+print_info() {
+  echo ">> $1"
+}
+
+print_error() {
+  echo "ERROR: $1" >&2
+}
+
+print_title() {
+  echo "=============================================="
+  echo ">> $1"
+  echo "=============================================="
+}
+
 # Detect if we're inside chroot
 if [ ! -f /etc/passwd ]; then
-  echo "Error: This script must be run inside the Gentoo chroot"
+  print_error "This script must be run inside the Gentoo chroot"
   exit 1
 fi
 
