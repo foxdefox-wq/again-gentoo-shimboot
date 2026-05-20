@@ -120,17 +120,23 @@ elif [ "$distro" = "gentoo" ]; then
     exit 1
   fi
   
-  # New URL format for Gentoo autobuilds directory
-  # Gentoo now uses "current-stage3-<arch>-openrc" directories
+  # Gentoo autobuilds directory
   stage3_dir="https://distfiles.gentoo.org/releases/$gentoo_arch/autobuilds/current-stage3-${gentoo_arch}-openrc"
   
-  # Fetch the directory listing and find the latest tarball
+  # Always fetch fresh directory listing
   print_info "Fetching stage3 tarball list from Gentoo mirrors..."
   stage3_html="/tmp/gentoo-stage3-list.html"
+  rm -f "$stage3_html"
   wget -q "$stage3_dir/" -O "$stage3_html"
   
-  # Extract the tarball filename - find the latest .tar.xz file (not .asc)
-  stage3_file=$(grep -oE 'stage3-[^"]+\.tar\.xz' "$stage3_html" | grep -v '\.asc' | head -1)
+  if [ ! -s "$stage3_html" ]; then
+    print_error "Failed to fetch directory listing"
+    exit 1
+  fi
+  
+  # Extract all .tar.xz filenames, excluding .asc signature files
+  # Sort by timestamp (newest first) to get the latest
+  stage3_file=$(grep -oE 'stage3-[^"<]+\.tar\.xz' "$stage3_html" | grep -v '\.asc' | sort -r | head -1)
   
   if [ -z "$stage3_file" ]; then
     print_error "Failed to find stage3 tarball in directory listing"
@@ -144,7 +150,7 @@ elif [ "$distro" = "gentoo" ]; then
   print_info "Downloading from: $stage3_full_url"
   
   # Clean up any previous attempt
-  rm -f /tmp/stage3-${gentoo_arch}.tar.xz
+  rm -f "/tmp/stage3-${gentoo_arch}.tar.xz"
   
   # Download with progress, check for errors
   print_info "Downloading stage3 tarball (this may take a few minutes)..."
@@ -161,8 +167,6 @@ elif [ "$distro" = "gentoo" ]; then
   if ! xz -t "$stage3_tarball" 2>/dev/null; then
     print_error "Downloaded file is not a valid xz archive"
     print_info "File size: $(ls -la "$stage3_tarball" | awk '{print $5}') bytes"
-    print_info "First 100 bytes:"
-    head -c 100 "$stage3_tarball" | cat -v
     rm -f "$stage3_tarball" "$stage3_html"
     exit 1
   fi
