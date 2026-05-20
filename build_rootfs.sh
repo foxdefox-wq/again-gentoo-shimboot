@@ -120,6 +120,10 @@ elif [ "$distro" = "gentoo" ]; then
     exit 1
   fi
   
+  # Determine cache directory (use data_dir from the caller, or default to ./data)
+  stage3_cache_dir="$(dirname "$rootfs_dir")"
+  mkdir -p "$stage3_cache_dir"
+  
   # Gentoo autobuilds directory
   stage3_dir="https://distfiles.gentoo.org/releases/$gentoo_arch/autobuilds/current-stage3-${gentoo_arch}-openrc"
   
@@ -145,30 +149,39 @@ elif [ "$distro" = "gentoo" ]; then
   fi
   
   stage3_full_url="${stage3_dir}/${stage3_file}"
+  stage3_tarball="${stage3_cache_dir}/${stage3_file}"
   
   print_info "Found stage3 tarball: $stage3_file"
   print_info "Downloading from: $stage3_full_url"
   
-  # Clean up any previous attempt
-  rm -f "/tmp/stage3-${gentoo_arch}.tar.xz"
-  
-  # Download with progress, check for errors
-  print_info "Downloading stage3 tarball (this may take a few minutes)..."
-  if ! wget --progress=dot:giga "$stage3_full_url" -O "/tmp/stage3-${gentoo_arch}.tar.xz" 2>&1; then
-    print_error "Failed to download stage3 tarball"
-    rm -f "$stage3_html"
-    exit 1
+  # Use cached tarball if it exists and is valid
+  if [ -f "$stage3_tarball" ]; then
+    print_info "Found cached tarball at $stage3_tarball, validating..."
+    if xz -t "$stage3_tarball" 2>/dev/null; then
+      print_info "Cached tarball is valid, skipping download"
+    else
+      print_info "Cached tarball is corrupt, re-downloading..."
+      rm -f "$stage3_tarball"
+    fi
   fi
   
-  stage3_tarball="/tmp/stage3-${gentoo_arch}.tar.xz"
-  
-  # Validate the downloaded file is a valid xz archive
-  print_info "Validating tarball..."
-  if ! xz -t "$stage3_tarball" 2>/dev/null; then
-    print_error "Downloaded file is not a valid xz archive"
-    print_info "File size: $(ls -la "$stage3_tarball" | awk '{print $5}') bytes"
-    rm -f "$stage3_tarball" "$stage3_html"
-    exit 1
+  # Download if not cached (or cache was invalid)
+  if [ ! -f "$stage3_tarball" ]; then
+    print_info "Downloading stage3 tarball (this may take a few minutes)..."
+    if ! wget --progress=dot:giga "$stage3_full_url" -O "$stage3_tarball" 2>&1; then
+      print_error "Failed to download stage3 tarball"
+      rm -f "$stage3_tarball" "$stage3_html"
+      exit 1
+    fi
+    
+    # Validate the downloaded file is a valid xz archive
+    print_info "Validating tarball..."
+    if ! xz -t "$stage3_tarball" 2>/dev/null; then
+      print_error "Downloaded file is not a valid xz archive"
+      print_info "File size: $(ls -la "$stage3_tarball" | awk '{print $5}') bytes"
+      rm -f "$stage3_tarball" "$stage3_html"
+      exit 1
+    fi
   fi
   
   print_info "Extracting stage3 tarball (this may take a while)..."
@@ -179,14 +192,13 @@ elif [ "$distro" = "gentoo" ]; then
     print_error "Stage3 extraction failed - /etc/passwd not found"
     print_info "Contents of rootfs:"
     ls -la "$rootfs_dir/"
-    rm -f "$stage3_tarball" "$stage3_html"
+    rm -f "$stage3_html"
     exit 1
   fi
   
   print_info "Stage3 extraction complete"
   
-  # Clean up
-  rm -f "$stage3_tarball"
+  # Clean up listing (keep the tarball for caching)
   rm -f "$stage3_html"
   
   chroot_script="/opt/setup_rootfs_gentoo.sh"

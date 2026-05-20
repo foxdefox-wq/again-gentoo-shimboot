@@ -52,14 +52,17 @@ fi
 echo "hostname=\"${hostname}\"" > /etc/conf.d/hostname
 hostname "$hostname"
 
+# Compute values for make.conf ahead of time
+NPROC="$(nproc)"
+
 # Configure make.conf for ChromeOS kernel compatibility
 print_info "Configuring Portage make.conf..."
-cat > /etc/portage/make.conf << 'MAKEEOF'
+cat > /etc/portage/make.conf << MAKEEOF
 # Gentoo shimboot make.conf - optimized for ChromeOS kernel compatibility
 
 CFLAGS="-O2 -pipe -march=native"
-CXXFLAGS="${CFLAGS}"
-MAKEOPTS="-j$(nproc)"
+CXXFLAGS="\${CFLAGS}"
+MAKEOPTS="-j${NPROC}"
 
 # USE flags for XFCE desktop with LightDM
 USE="X xfce thunar udev policykit elogind udisksconsole networkmanager pulseaudio"
@@ -74,10 +77,10 @@ DISTDIR="/var/cache/distfiles"
 PKGDIR="/var/cache/binpkgs"
 
 # Emerge options
-EMERGE_DEFAULT_OPTS="--quiet-build=y --verbose-build=n"
-MAKEFLAGS="-j$(nproc)"
-FETCHCOMMAND="wget -c \${URI} -O \${DISTDIR}/\${FILE}"
-RESUMECOMMAND="wget -c \${URI} -O \${DISTDIR}/\${FILE}"
+EMERGE_DEFAULT_OPTS="--quiet-build=y"
+MAKEFLAGS="-j${NPROC}"
+FETCHCOMMAND="wget -c \\\${URI} -O \\\${DISTDIR}/\\\${FILE}"
+RESUMECOMMAND="wget -c \\\${URI} -O \\\${DISTDIR}/\\\${FILE}"
 MAKEEOF
 
 # Ensure portage directories exist
