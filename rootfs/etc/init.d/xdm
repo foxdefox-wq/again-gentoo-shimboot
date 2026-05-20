@@ -1,0 +1,37 @@
+#!/sbin/runscript
+# OpenRC init script to start X Display Manager (LightDM)
+# Required for Gentoo shimboot
+
+description="X Display Manager (LightDM)"
+
+depend() {
+    need localmount
+    after dbus bootmisc
+    use consolekit elogind
+}
+
+start() {
+    ebegin "Starting LightDM display manager"
+    
+    # Ensure required directories exist
+    mkdir -p /run/lightdm
+    
+    # Set proper permissions
+    chown root:lightdm /run/lightdm 2>/dev/null || true
+    chmod 755 /run/lightdm 2>/dev/null || true
+    
+    # Start LightDM
+    lightdm &
+    
+    eend 0
+}
+
+stop() {
+    ebegin "Stopping LightDM display manager"
+    
+    # Kill LightDM and any greeter processes
+    pkill -9 lightdm 2>/dev/null || true
+    pkill -9 lightdm-greeter 2>/dev/null || true
+    
+    eend 0
+}
