@@ -230,7 +230,7 @@ fi
 
 desktop_packages=(
   xfce-base/xfce4-meta
-  xfce-extra/thunar-volman
+  xfce-base/thunar-volman
   xfce-extra/xfce4-notifyd
   xfce-extra/xfce4-pulseaudio-plugin
   x11-misc/lightdm

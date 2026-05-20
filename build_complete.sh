@@ -328,7 +328,7 @@ if [ ! "$rootfs_dir" ]; then
   elif [ "$distro" = "gentoo" ]; then
     release="current"
     # Gentoo always uses XFCE with LightDM as per user's requirement
-    desktop_package="xfce-base/xfce4-meta xfce-extra/thunar-volman xfce-extra/xfce4-notifyd xfce-extra/xfce4-pulseaudio-plugin x11-misc/lightdm x11-misc/lightdm-gtk-greeter"
+    desktop_package="xfce-base/xfce4-meta xfce-base/thunar-volman xfce-extra/xfce4-notifyd xfce-extra/xfce4-pulseaudio-plugin x11-misc/lightdm x11-misc/lightdm-gtk-greeter"
     # Gentoo doesn't need debootstrap - it uses stage3 tarballs
     # But we do need git for emerge-webrsync
     if ! command -v git &> /dev/null; then
