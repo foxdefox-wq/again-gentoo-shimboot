@@ -16,6 +16,7 @@ print_help() {
   echo "  disable_base    - Disable the base packages such as zram, cloud-utils, and command-not-found."
   echo "  arch            - The CPU architecture to build the rootfs for."
   echo "  distro          - The Linux distro to use. This should be 'debian', 'ubuntu', 'alpine', or 'gentoo'."
+  echo "  gentoo_binpkg_only - Gentoo only: set to 1 to fail instead of compiling packages missing from the binhost."
   echo "If you do not specify the hostname and credentials, you will be prompted for them later."
 }
 
@@ -228,12 +229,13 @@ enable_root="${args['enable_root']}"
 username="${args['username']}"
 user_passwd="${args['user_passwd']}"
 disable_base="${args['disable_base']}"
+gentoo_binpkg_only="${args['gentoo_binpkg_only']}"
 
 chroot_command="$chroot_script \
   '$DEBUG' '$release_name' '$packages' \
   '$hostname' '$root_passwd' '$username' \
   '$user_passwd' '$enable_root' '$disable_base' \
-  '$arch'" 
+  '$arch' '$gentoo_binpkg_only'"
 
 LC_ALL=C chroot $rootfs_dir /bin/sh -c "${chroot_command}"
 

@@ -1,8 +1,9 @@
 #!/bin/bash
 
 # Setup script for Gentoo rootfs on shimboot
-# This script runs inside the chroot after stage3 extraction
-# Note: emerge commands run inside the chroot, not on the host
+# This script runs inside the chroot after stage3 extraction.
+# Package installation is configured to prefer Gentoo binary packages from
+# the official binhost instead of compiling everything locally.
 
 DEBUG="$1"
 set -e
@@ -19,6 +20,7 @@ user_passwd="$7"
 enable_root="$8"
 disable_base_pkgs="$9"
 arch="${10}"
+gentoo_binpkg_only="${11}"
 
 # Define print functions (common.sh not available inside chroot)
 print_info() {
@@ -43,6 +45,7 @@ fi
 
 # Set up environment
 export CONFIG_PROTECT="-*"
+export ACCEPT_LICENSE="*"
 
 # Set hostname
 if [ ! "$hostname" ]; then
@@ -54,21 +57,78 @@ hostname "$hostname"
 # Compute values for make.conf ahead of time
 NPROC="$(nproc)"
 
-# Configure make.conf for ChromeOS kernel compatibility
-print_info "Configuring Portage make.conf..."
+# Map shimboot arch values to Gentoo binhost paths and conservative compiler flags.
+# Keeping the compiler flags/profile close to the official binhost means Portage can
+# use more prebuilt packages instead of falling back to local source builds.
+case "$arch" in
+  amd64|x86_64)
+    gentoo_arch="amd64"
+    binhost_uri="https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/"
+    common_flags="-O2 -pipe -march=x86-64 -mtune=generic"
+    ;;
+  arm64|aarch64)
+    gentoo_arch="arm64"
+    binhost_uri="https://distfiles.gentoo.org/releases/arm64/binpackages/23.0/arm64/"
+    common_flags="-O2 -pipe"
+    ;;
+  *)
+    print_error "Unsupported architecture for Gentoo binhost: $arch"
+    exit 1
+    ;;
+esac
+
+# Default to preferring binary packages. If gentoo_binpkg_only=1/true/yes is passed,
+# fail instead of compiling a package that is missing from the binhost.
+binpkg_mode="prefer"
+case "$gentoo_binpkg_only" in
+  1|true|yes|on)
+    binpkg_mode="only"
+    ;;
+esac
+
+# Ensure Portage directories exist before writing config.
+mkdir -p /etc/portage/binrepos.conf 2>/dev/null || true
+mkdir -p /etc/portage/package.accept_keywords 2>/dev/null || true
+mkdir -p /etc/portage/package.use 2>/dev/null || true
+mkdir -p /var/db/repos/gentoo 2>/dev/null || true
+mkdir -p /var/cache/distfiles 2>/dev/null || true
+mkdir -p /var/cache/binpkgs 2>/dev/null || true
+mkdir -p /var/cache/binhost/gentoo 2>/dev/null || true
+mkdir -p /var/tmp/portage 2>/dev/null || true
+
+# Configure the official Gentoo binary package host explicitly. Recent stage3s may
+# already contain this file, but writing it here keeps older stage3s working too.
+print_info "Configuring Gentoo binary package host..."
+cat > /etc/portage/binrepos.conf/gentoobinhost.conf << BINHOSTEOF
+[gentoo]
+priority = 9999
+sync-uri = ${binhost_uri}
+verify-signature = true
+location = /var/cache/binhost/gentoo
+BINHOSTEOF
+
+# Configure make.conf for ChromeOS kernel compatibility and binary packages.
+# Do not force ACCEPT_KEYWORDS=~amd64; the official binhost is primarily stable,
+# and unstable keywords would make Portage compile many packages from source.
+print_info "Configuring Portage make.conf for binary packages..."
 cat > /etc/portage/make.conf << MAKEEOF
-# Gentoo shimboot make.conf - optimized for ChromeOS kernel compatibility
+# Gentoo shimboot make.conf - tuned to use official Gentoo binary packages
 
-CFLAGS="-O2 -pipe -march=native"
-CXXFLAGS="\${CFLAGS}"
+COMMON_FLAGS="${common_flags}"
+CFLAGS="\${COMMON_FLAGS}"
+CXXFLAGS="\${COMMON_FLAGS}"
+FCFLAGS="\${COMMON_FLAGS}"
+FFLAGS="\${COMMON_FLAGS}"
 MAKEOPTS="-j${NPROC}"
+MAKEFLAGS="-j${NPROC}"
 
-# USE flags for XFCE desktop with LightDM + gawk for app-alternatives/awk
-USE="X xfce thunar udev policykit elogind udisks consolekit networkmanager pulseaudio gawk"
+# Keep global USE modest so Portage can match the official binhost USE sets.
+# Package-specific USE below adds only the flags shimboot needs.
+USE="X udev elogind policykit pulseaudio gawk"
 
-# Accept all licenses for binary packages
+# Use official binary packages by default, with GPG signature verification.
+FEATURES="getbinpkg binpkg-request-signature"
 ACCEPT_LICENSE="*"
-ACCEPT_KEYWORDS="~amd64"
 
 # Portage directories
 PORTDIR="/var/db/repos/gentoo"
@@ -76,67 +136,120 @@ DISTDIR="/var/cache/distfiles"
 PKGDIR="/var/cache/binpkgs"
 
 # Emerge options
-EMERGE_DEFAULT_OPTS="--quiet-build=y"
-MAKEFLAGS="-j${NPROC}"
+EMERGE_DEFAULT_OPTS="--quiet-build=y --getbinpkg --binpkg-respect-use=y --with-bdeps=n"
 FETCHCOMMAND="wget -c \\\${URI} -O \\\${DISTDIR}/\\\${FILE}"
 RESUMECOMMAND="wget -c \\\${URI} -O \\\${DISTDIR}/\\\${FILE}"
 MAKEEOF
 
-# Ensure portage directories exist
-mkdir -p /etc/portage/package.accept_keywords 2>/dev/null || true
-mkdir -p /etc/portage/package.use 2>/dev/null || true
-mkdir -p /var/db/repos/gentoo 2>/dev/null || true
-mkdir -p /var/cache/distfiles 2>/dev/null || true
-mkdir -p /var/tmp/portage 2>/dev/null || true
+if [ "$binpkg_mode" = "only" ]; then
+  print_info "Strict binary package mode enabled; missing binpkgs will fail the build."
+  sed -i 's/EMERGE_DEFAULT_OPTS="/EMERGE_DEFAULT_OPTS="--usepkgonly /' /etc/portage/make.conf
+else
+  print_info "Binary packages will be preferred; Portage may compile only if no matching binpkg exists."
+fi
 
-# Explicitly set awk provider to avoid REQUIRED_USE error
-cat > /etc/portage/package.use/awk << 'AWKEOF'
+# Explicitly set USE flags needed by this image without forcing unnecessary global
+# differences that would prevent binary package matches.
+cat > /etc/portage/package.use/shimboot << 'USEEOF'
 app-alternatives/awk gawk
-AWKEOF
+sys-auth/elogind policykit
+sys-auth/polkit elogind
+sys-fs/udisks elogind
+x11-misc/lightdm elogind
+x11-drivers/xf86-input-libinput udev
+x11-base/xorg-server udev
+media-libs/mesa X
+USEEOF
 
-# Sync portage tree
+# Helper that installs packages through the binhost-aware Portage config.
+emerge_binpkg() {
+  local description="$1"
+  shift
+
+  if [ "$#" -eq 0 ]; then
+    return 0
+  fi
+
+  print_info "$description"
+  if [ "$binpkg_mode" = "only" ]; then
+    emerge --getbinpkg --usepkgonly --binpkg-respect-use=y --quiet-build=y "$@" 2>&1
+  else
+    emerge --getbinpkg --binpkg-respect-use=y --quiet-build=y "$@" 2>&1
+  fi
+}
+
+# Sync portage tree. The binhost still needs repository metadata for dependency
+# resolution, but package payloads will come from the binhost whenever possible.
 print_info "Syncing Portage tree..."
 emerge-webrsync --quiet 2>&1 || emerge --sync --quiet 2>&1
 
-# Update world
-print_info "Updating base system..."
-emerge --quiet-build=y @world 2>&1
+# Initialize Gentoo binhost signing keys if the trust tool is present. Do not fail
+# older stage3s that do not ship getuto yet; emerge will also attempt setup when
+# it first downloads signed binary packages.
+if command -v getuto >/dev/null 2>&1; then
+  print_info "Initializing Gentoo binhost trust keys..."
+  getuto 2>&1 || true
+fi
 
-# Install essential packages
-print_info "Installing base packages..."
-emerge --quiet-build=y \
-  sudo \
-  networkmanager \
-  cronie \
-  wpa_supplicant \
-  dhcpcd \
-  nano \
-  gentoolkit \
-  elogind \
-  polkit \
-  udisks \
-  zram-init \
-  bash-completion 2>&1
+# Update world through binary packages first so the stage3 is consistent with the
+# package set used for the rest of the install.
+emerge_binpkg "Updating base system using binary packages..." --update --deep --changed-use @world
 
-# Install Xorg and graphics drivers
-print_info "Installing Xorg and graphics drivers..."
-emerge --quiet-build=y \
-  xorg-server \
-  xf86-input-libinput \
-  xf86-video-intel \
-  mesa \
-  glamor-egl \
-  libva-intel-driver 2>&1
+# Default Gentoo shimboot package set. Keep this in one install transaction so
+# Portage can solve dependencies once and pull as many packages as possible from
+# the official binhost.
+essential_packages=(
+  app-admin/sudo
+  net-misc/networkmanager
+  sys-process/cronie
+  net-wireless/wpa_supplicant
+  net-misc/dhcpcd
+  app-editors/nano
+  app-portage/gentoolkit
+  sys-auth/elogind
+  sys-auth/polkit
+  sys-fs/udisks
+  sys-block/zram-init
+  app-shells/bash-completion
+)
 
-# Install XFCE desktop with LightDM
-print_info "Installing XFCE desktop with LightDM..."
-emerge --quiet-build=y \
-  xfce-base/xfce4-meta \
-  xfce-extra/thunar-volman \
-  xfce-extra/xfce4-notifyd \
-  xfce-extra/xfce4-pulseaudio-plugin \
-  lightdm \
-  lightdm-gtk-greeter 2>&1
+graphics_packages=(
+  x11-base/xorg-server
+  x11-drivers/xf86-input-libinput
+  media-libs/mesa
+)
+
+# Intel VA/Xorg drivers are only useful on amd64 Chromebooks and are not stable
+# on arm64, so keep them out of ARM builds to avoid source compiles/failures.
+if [ "$gentoo_arch" = "amd64" ]; then
+  graphics_packages+=(
+    x11-drivers/xf86-video-intel
+    media-libs/libva-intel-driver
+  )
+fi
+
+desktop_packages=(
+  xfce-base/xfce4-meta
+  xfce-extra/thunar-volman
+  xfce-extra/xfce4-notifyd
+  xfce-extra/xfce4-pulseaudio-plugin
+  x11-misc/lightdm
+  x11-misc/lightdm-gtk-greeter
+)
+
+base_packages=("${essential_packages[@]}" "${graphics_packages[@]}")
+default_packages=("${base_packages[@]}" "${desktop_packages[@]}")
+
+# If the caller supplied custom_packages, use those as the desktop/application
+# package set while still installing the non-desktop shimboot base packages.
+install_packages=("${default_packages[@]}")
+if [ "$packages" ] && [ "$packages" != "task-xfce-desktop" ]; then
+  # shellcheck disable=SC2206 # Intentional split of the custom package list.
+  custom_packages=( $packages )
+  install_packages=("${base_packages[@]}" "${custom_packages[@]}")
+fi
+
+emerge_binpkg "Installing shimboot package set using Gentoo binpkgs..." "${install_packages[@]}"
 
 # Configure OpenRC services
 print_info "Configuring OpenRC services..."
@@ -149,7 +262,7 @@ NETEOF
 ln -sf /etc/init.d/net.lo /etc/run/openrc/started/net.eth0 2>/dev/null || true
 rc-update add net.eth0 default 2>/dev/null || true
 
-# Consolekit for LightDM
+# Consolekit for LightDM if available
 rc-update add consolekit boot 2>/dev/null || true
 
 # Dbus
@@ -195,12 +308,14 @@ description="X Display Manager (LightDM)"
 depend() {
     need localmount
     after dbus bootmisc
+    use elogind
 }
 
 start() {
     ebegin "Starting LightDM"
     mkdir -p /run/lightdm
-    touch /run/lightdm/lightdm.pid
+    chown root:lightdm /run/lightdm 2>/dev/null || true
+    chmod 755 /run/lightdm 2>/dev/null || true
     /usr/sbin/lightdm &
     eend 0
 }
@@ -219,9 +334,9 @@ rc-update add xdm default 2>/dev/null || true
 print_info "Configuring LightDM..."
 mkdir -p /etc/lightdm
 
-cat > /etc/lightdm/lightdm.conf << 'LDMEOF'
+cat > /etc/lightdm/lightdm.conf << LDMEOF
 [Seat:*]
-autologin-user=user
+autologin-user=${username:-user}
 user-session=xfce
 allow-user-switching=true
 greeter-session=lightdm-gtk-greeter
@@ -251,28 +366,34 @@ fi
 print_info "Creating user: $username"
 useradd -m -G wheel,audio,video,usb,input,portage,plugdev -s /bin/bash "$username" 2>/dev/null || true
 
-# Configure sudo
-echo "%wheel ALL=(ALL:ALL) ALL" >> /etc/sudoers
-echo "$username ALL=(ALL:ALL) NOPASSWD: ALL" >> /etc/sudoers
+# Configure sudo idempotently
+if ! grep -q '^%wheel ALL=(ALL:ALL) ALL' /etc/sudoers 2>/dev/null; then
+  echo "%wheel ALL=(ALL:ALL) ALL" >> /etc/sudoers
+fi
+if ! grep -q "^$username ALL=(ALL:ALL) NOPASSWD: ALL" /etc/sudoers 2>/dev/null; then
+  echo "$username ALL=(ALL:ALL) NOPASSWD: ALL" >> /etc/sudoers
+fi
 
 # Set passwords
 set_password() {
   local user="$1"
   local password="$2"
   if [ ! "$password" ]; then
-    while ! passwd $user; do
+    while ! passwd "$user"; do
       echo "Failed to set password for $user, please try again."
     done
   else
-    yes "$password" | passwd $user 2>/dev/null || true
+    yes "$password" | passwd "$user" 2>/dev/null || true
   fi
 }
 
-if [ "$enable_root" ]; then 
+if [ "$enable_root" ]; then
   set_password root "$root_passwd"
 else
   # Allow wheel group sudo without password for user
-  echo "%wheel ALL=(ALL:ALL) NOPASSWD: ALL" >> /etc/sudoers
+  if ! grep -q '^%wheel ALL=(ALL:ALL) NOPASSWD: ALL' /etc/sudoers 2>/dev/null; then
+    echo "%wheel ALL=(ALL:ALL) NOPASSWD: ALL" >> /etc/sudoers
+  fi
 fi
 
 set_password "$username" "$user_passwd"
@@ -302,9 +423,13 @@ if [ -d /etc/modules-load.d ]; then
   done
 fi
 
-# Clean up
-print_info "Cleaning portage cache..."
-emerge --depclean --quiet=y 2>/dev/null || true
+# Clean up. Avoid depclean in strict binpkg mode: if a dependency has no current
+# binpkg, a cleanup pass can turn a successful binary install into a source-build
+# or failure. The final image build will squash/compress caches anyway.
+if [ "$binpkg_mode" != "only" ]; then
+  print_info "Cleaning unused Portage packages..."
+  emerge --depclean --quiet=y 2>/dev/null || true
+fi
 
 print_info ""
 print_info "=============================================="
@@ -316,7 +441,7 @@ print_info "  Password: $user_passwd"
 print_info ""
 print_info "Desktop: XFCE with LightDM"
 print_info "Init: OpenRC (not systemd)"
+print_info "Packages: Gentoo binhost mode = $binpkg_mode"
 print_info "=============================================="
 print_info ""
 print_info "Note: patch_rootfs.sh will copy ChromeOS modules and firmware."
-

@@ -17,6 +17,7 @@ print_help() {
   echo "  distro       - The Linux distro to use. This should be 'debian', 'ubuntu', 'alpine', or 'gentoo'."
   echo "  luks         - Set this argument to encrypt the rootfs partition."
   echo "  kernel_ver   - Specify a specific ChromeOS kernel version to use (e.g., '5.4.85')."
+  echo "  gentoo_binpkg_only - Gentoo only: set to 1 to fail instead of compiling packages missing from the binhost."
 }
 
 assert_root
@@ -36,6 +37,7 @@ release="${args['release']}"
 distro="${args['distro']-debian}"
 luks="${args['luks']}"
 kernel_ver="${args['kernel_ver']}"
+gentoo_binpkg_only="${args['gentoo_binpkg_only']}"
 
 # Default kernel version for dedede (can be overridden)
 # The dedede board uses kernel 5.4.85 which is specified by the user
@@ -326,7 +328,7 @@ if [ ! "$rootfs_dir" ]; then
   elif [ "$distro" = "gentoo" ]; then
     release="current"
     # Gentoo always uses XFCE with LightDM as per user's requirement
-    desktop_package="xfce xfce-extra/xfce4-goodies lightdm lightdm-gtk-greeter"
+    desktop_package="xfce-base/xfce4-meta xfce-extra/thunar-volman xfce-extra/xfce4-notifyd xfce-extra/xfce4-pulseaudio-plugin x11-misc/lightdm x11-misc/lightdm-gtk-greeter"
     # Gentoo doesn't need debootstrap - it uses stage3 tarballs
     # But we do need git for emerge-webrsync
     if ! command -v git &> /dev/null; then
@@ -361,7 +363,8 @@ if [ ! "$rootfs_dir" ]; then
     username=user \
     user_passwd=user \
     arch=$arch \
-    distro=$distro
+    distro=$distro \
+    gentoo_binpkg_only=$gentoo_binpkg_only
 fi
 
 print_title "patching $distro rootfs"

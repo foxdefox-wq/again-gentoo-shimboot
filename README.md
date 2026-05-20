@@ -39,7 +39,7 @@ Simply replacing the shim's rootfs doesn't work, as it boots in an environment f
 
 Gentoo offers several advantages for shimboot:
 
-- **Portage package manager** - compile packages optimized for your hardware
+- **Portage package manager** - configured to use official Gentoo binary packages for much faster builds
 - **OpenRC init system** - more compatible with ChromeOS kernel than systemd
 - **Rolling release** - always up-to-date packages
 - **Flexible USE flags** - customize your system exactly
@@ -98,7 +98,7 @@ On all devices:
 ### Prerequisites
 
 - A separate Linux PC for the build process (preferably Debian-based)
-- At least 40GB of free disk space (Gentoo compilation requires more space)
+- At least 40GB of free disk space (less CPU time is needed because Gentoo uses binary packages where possible)
 - A USB drive that is at least 8GB in size (16GB recommended)
 
 ### Build Instructions
@@ -111,10 +111,14 @@ On all devices:
 
 ```bash
 # Build Gentoo with default settings (XFCE, LightDM, kernel 5.4.85 for dedede)
+# Gentoo packages are pulled from the official binhost whenever possible.
 sudo ./build_complete.sh dedede distro=gentoo
 
 # Use a specific kernel version
 sudo ./build_complete.sh dedede distro=gentoo kernel_ver=5.4.85
+
+# Refuse to compile from source if a matching binary package is unavailable
+sudo ./build_complete.sh dedede distro=gentoo gentoo_binpkg_only=1
 
 # Compress the final image
 sudo ./build_complete.sh dedede distro=gentoo compress_img=1
@@ -159,6 +163,10 @@ sudo ./build_complete.sh dedede distro=alpine
 
 ## FAQ
 
+### Does Gentoo compile everything during the build?
+
+No. This fork configures `/etc/portage/binrepos.conf/gentoobinhost.conf` and `EMERGE_DEFAULT_OPTS` so `emerge` downloads official Gentoo binary packages (`--getbinpkg`) by default. The normal mode prefers binpkgs and only falls back to source if the binhost does not have a matching package. If you want the build to fail instead of compiling any missing package, add `gentoo_binpkg_only=1`.
+
 ### Why does Gentoo use OpenRC instead of systemd?
 
 The ChromeOS kernel has compatibility issues with systemd's mount handling. OpenRC provides a simpler init system that works more reliably with the shimboot approach. Additionally, OpenRC is the default init system for Gentoo and integrates well with Gentoo's init system configuration.
@@ -166,7 +174,7 @@ The ChromeOS kernel has compatibility issues with systemd's mount handling. Open
 ### How is Gentoo different from other distros?
 
 - Uses Portage package manager (source-based)
-- Compiles packages during installation
+- Uses official Gentoo binary packages during installation whenever possible
 - Uses OpenRC init system
 - Rolling release model
 
