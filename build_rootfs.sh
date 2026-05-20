@@ -83,7 +83,7 @@ elif [ "$distro" = "ubuntu" ]; then
 elif [ "$distro" = "alpine" ]; then
   print_info "downloading alpine package list"
   pkg_list_url="https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64/"
-  pkg_data="$(wget -qO- --show-progress "$pkg_list_url" | grep "apk-tools-static")"
+  pkg_data="$(wget -qO- "$pkg_list_url" | grep "apk-tools-static")"
   pkg_url="$pkg_list_url$(echo "$pkg_data" | grep -oP '"[^"]+\.apk"' | tr -d '"' | tail -1)"
 
   print_info "downloading and extracting apk-tools-static"
@@ -91,7 +91,7 @@ elif [ "$distro" = "alpine" ]; then
   pkg_dl_path="$pkg_extract_dir/pkg.apk"
   apk_static="$pkg_extract_dir/sbin/apk.static"
   mkdir -p "$pkg_extract_dir"
-  wget -q --show-progress "$pkg_url" -O "$pkg_dl_path"
+  wget -q "$pkg_url" -O "$pkg_dl_path"
   tar --warning=no-unknown-keyword -xzf "$pkg_dl_path" -C "$pkg_extract_dir"
 
   print_info "bootstraping alpine chroot"
@@ -127,14 +127,13 @@ elif [ "$distro" = "gentoo" ]; then
   # Fetch the directory listing and find the latest tarball
   print_info "Fetching stage3 tarball list from Gentoo mirrors..."
   stage3_html="/tmp/gentoo-stage3-list.html"
-  wget --progress=dot:giga "$stage3_dir/" -O "$stage3_html" 2>&1
+  wget -q "$stage3_dir/" -O "$stage3_html"
   
   # Extract the tarball filename - find the latest .tar.xz file (not .asc)
   stage3_file=$(grep -oE 'stage3-[^"]+\.tar\.xz' "$stage3_html" | grep -v '\.asc' | head -1)
   
   if [ -z "$stage3_file" ]; then
     print_error "Failed to find stage3 tarball in directory listing"
-    cat "$stage3_html" | grep -i "tar"
     rm -f "$stage3_html"
     exit 1
   fi
@@ -144,14 +143,43 @@ elif [ "$distro" = "gentoo" ]; then
   print_info "Found stage3 tarball: $stage3_file"
   print_info "Downloading from: $stage3_full_url"
   
+  # Clean up any previous attempt
+  rm -f /tmp/stage3-${gentoo_arch}.tar.xz
+  
+  # Download with progress, check for errors
+  print_info "Downloading stage3 tarball (this may take a few minutes)..."
+  if ! wget --progress=dot:giga "$stage3_full_url" -O "/tmp/stage3-${gentoo_arch}.tar.xz" 2>&1; then
+    print_error "Failed to download stage3 tarball"
+    rm -f "$stage3_html"
+    exit 1
+  fi
+  
   stage3_tarball="/tmp/stage3-${gentoo_arch}.tar.xz"
-  if [ ! -f "$stage3_tarball" ]; then
-    print_info "Downloading stage3 tarball (this may take a few minutes)..."
-    wget --progress=dot:giga "$stage3_full_url" -O "$stage3_tarball"
+  
+  # Validate the downloaded file is a valid xz archive
+  print_info "Validating tarball..."
+  if ! xz -t "$stage3_tarball" 2>/dev/null; then
+    print_error "Downloaded file is not a valid xz archive"
+    print_info "File size: $(ls -la "$stage3_tarball" | awk '{print $5}') bytes"
+    print_info "First 100 bytes:"
+    head -c 100 "$stage3_tarball" | cat -v
+    rm -f "$stage3_tarball" "$stage3_html"
+    exit 1
   fi
   
   print_info "Extracting stage3 tarball (this may take a while)..."
-  tar xpvf "$stage3_tarball" --xattrs-include='*/*' --numeric-owner -C "$rootfs_dir" 2>&1 | tail -20
+  tar xpf "$stage3_tarball" --xattrs-include='*/*' --numeric-owner -C "$rootfs_dir" 2>&1 | tail -30
+  
+  # Verify extraction worked
+  if [ ! -f "$rootfs_dir/etc/passwd" ]; then
+    print_error "Stage3 extraction failed - /etc/passwd not found"
+    print_info "Contents of rootfs:"
+    ls -la "$rootfs_dir/"
+    rm -f "$stage3_tarball" "$stage3_html"
+    exit 1
+  fi
+  
+  print_info "Stage3 extraction complete"
   
   # Clean up
   rm -f "$stage3_tarball"
@@ -167,6 +195,9 @@ fi
 print_info "copying rootfs setup scripts"
 cp -arv rootfs/* "$rootfs_dir" 2>/dev/null || true
 cp /etc/resolv.conf "$rootfs_dir/etc/resolv.conf" 2>/dev/null || true
+
+# Clean up Windows Zone.Identifier files
+find "$rootfs_dir" -name "*.Zone.Identifier" -delete 2>/dev/null || true
 
 print_info "creating bind mounts for chroot"
 trap unmount_all EXIT

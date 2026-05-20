@@ -1,3 +1,5 @@
 /bootloader/bin/cryptsetup
 /data
 /*.bin
+*.Zone.Identifier
+*:Zone.Identifier
