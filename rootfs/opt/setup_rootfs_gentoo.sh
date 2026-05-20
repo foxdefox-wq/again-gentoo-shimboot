@@ -43,7 +43,6 @@ fi
 
 # Set up environment
 export CONFIG_PROTECT="-*"
-export USE="-*"
 
 # Set hostname
 if [ ! "$hostname" ]; then
@@ -64,8 +63,8 @@ CFLAGS="-O2 -pipe -march=native"
 CXXFLAGS="\${CFLAGS}"
 MAKEOPTS="-j${NPROC}"
 
-# USE flags for XFCE desktop with LightDM
-USE="X xfce thunar udev policykit elogind udisksconsole networkmanager pulseaudio"
+# USE flags for XFCE desktop with LightDM + gawk for app-alternatives/awk
+USE="X xfce thunar udev policykit elogind udisks consolekit networkmanager pulseaudio gawk"
 
 # Accept all licenses for binary packages
 ACCEPT_LICENSE="*"
@@ -89,6 +88,11 @@ mkdir -p /etc/portage/package.use 2>/dev/null || true
 mkdir -p /var/db/repos/gentoo 2>/dev/null || true
 mkdir -p /var/cache/distfiles 2>/dev/null || true
 mkdir -p /var/tmp/portage 2>/dev/null || true
+
+# Explicitly set awk provider to avoid REQUIRED_USE error
+cat > /etc/portage/package.use/awk << 'AWKEOF'
+app-alternatives/awk gawk
+AWKEOF
 
 # Sync portage tree
 print_info "Syncing Portage tree..."
@@ -315,3 +319,4 @@ print_info "Init: OpenRC (not systemd)"
 print_info "=============================================="
 print_info ""
 print_info "Note: patch_rootfs.sh will copy ChromeOS modules and firmware."
+
