@@ -127,7 +127,7 @@ elif [ "$distro" = "gentoo" ]; then
   # Fetch the directory listing and find the latest tarball
   print_info "Fetching stage3 tarball list from Gentoo mirrors..."
   stage3_html="/tmp/gentoo-stage3-list.html"
-  wget -q --show-progress "$stage3_dir/" -O "$stage3_html" 2>&1 | tail -3
+  wget --progress=dot:giga "$stage3_dir/" -O "$stage3_html" 2>&1
   
   # Extract the tarball filename - find the latest .tar.xz file (not .asc)
   stage3_file=$(grep -oE 'stage3-[^"]+\.tar\.xz' "$stage3_html" | grep -v '\.asc' | head -1)
@@ -146,10 +146,11 @@ elif [ "$distro" = "gentoo" ]; then
   
   stage3_tarball="/tmp/stage3-${gentoo_arch}.tar.xz"
   if [ ! -f "$stage3_tarball" ]; then
-    wget -q --show-progress "$stage3_full_url" -O "$stage3_tarball"
+    print_info "Downloading stage3 tarball (this may take a few minutes)..."
+    wget --progress=dot:giga "$stage3_full_url" -O "$stage3_tarball"
   fi
   
-  print_info "Extracting stage3 tarball (this may take a while)"
+  print_info "Extracting stage3 tarball (this may take a while)..."
   tar xpvf "$stage3_tarball" --xattrs-include='*/*' --numeric-owner -C "$rootfs_dir" 2>&1 | tail -20
   
   # Clean up
