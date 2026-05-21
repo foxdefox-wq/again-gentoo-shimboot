@@ -94,11 +94,14 @@ for dev in /sys/bus/i2c/drivers/elan_i2c/i2c-* /sys/bus/i2c/drivers/elants_i2c/i
     echo "$name" > /sys/bus/i2c/drivers/i2c_hid_acpi/bind 2>>"$log" || true
 done
 
-# Re-trigger device creation for input after the modules are present.
+# Populate /dev Alpine-style after modules are loaded, then also ask udev if it
+# is running. This covers both mdev-created nodes and udev-managed permissions.
+/usr/local/bin/shimboot-mdev-scan >>"$log" 2>&1 || true
 udevadm trigger --subsystem-match=input --action=add >>"$log" 2>&1 || true
 udevadm trigger --subsystem-match=hid --action=add >>"$log" 2>&1 || true
 udevadm trigger --subsystem-match=i2c --action=add >>"$log" 2>&1 || true
 udevadm settle --timeout=10 >>"$log" 2>&1 || true
+/usr/local/bin/shimboot-mdev-scan >>"$log" 2>&1 || true
 
 ls -la /dev/input >>"$log" 2>&1 || true
 cat /proc/bus/input/devices >>"$log" 2>&1 || true

@@ -1,0 +1,40 @@
+#!/bin/sh
+
+# Alpine-style device population for shimboot.
+# Upstream Alpine shimboot uses OpenRC+mdev, and mdev is more tolerant of the
+# ChromeOS shim kernel than udev/systemd-tmpfiles on some devices.
+
+log=/run/shimboot-mdev.log
+mkdir -p /run /dev
+: > "$log"
+
+find_busybox() {
+    for bb in /bootloader/bin/busybox /bin/busybox /usr/bin/busybox; do
+        [ -x "$bb" ] && { echo "$bb"; return 0; }
+    done
+    return 1
+}
+
+bb="$(find_busybox || true)"
+if [ -z "$bb" ]; then
+    echo "busybox not found" >> "$log"
+    exit 0
+fi
+
+# Match Alpine's mdev behavior: let mdev service future hotplug events, then
+# scan current sysfs devices. Keep this best-effort so boot never blocks.
+if [ -w /proc/sys/kernel/hotplug ]; then
+    echo "$bb mdev" > /proc/sys/kernel/hotplug 2>>"$log" || true
+fi
+
+"$bb" mdev -s >>"$log" 2>&1 || true
+
+# Make sure common directories/symlinks exist even with minimal mdev configs.
+mkdir -p /dev/input /dev/dri /dev/snd /dev/pts /dev/shm
+[ -e /dev/fd ] || ln -s /proc/self/fd /dev/fd 2>/dev/null || true
+[ -e /dev/stdin ] || ln -s /proc/self/fd/0 /dev/stdin 2>/dev/null || true
+[ -e /dev/stdout ] || ln -s /proc/self/fd/1 /dev/stdout 2>/dev/null || true
+[ -e /dev/stderr ] || ln -s /proc/self/fd/2 /dev/stderr 2>/dev/null || true
+
+ls -la /dev/input >>"$log" 2>&1 || true
+exit 0

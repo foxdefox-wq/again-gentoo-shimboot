@@ -4,7 +4,7 @@ description="Load Chromebook hardware/input modules for shimboot"
 command="/usr/local/bin/shimboot-load-hwmods"
 
 depend() {
-    need udev
-    after udev-trigger modules
+    need devfs sysfs shimboot-mdev
+    after shimboot-mdev modules
     before display-manager xdm shimboot-xfce
 }

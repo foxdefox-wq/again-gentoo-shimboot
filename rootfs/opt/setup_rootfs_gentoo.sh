@@ -253,6 +253,7 @@ essential_packages=(
   sys-fs/udisks
   sys-block/zram-init
   app-shells/bash-completion
+  sys-kernel/linux-firmware
   gui-libs/display-manager-init
   x11-apps/xinit
   x11-apps/xauth
@@ -522,6 +523,65 @@ exec su - "$user" -c "DISPLAY='$DISPLAY' XDG_RUNTIME_DIR='/run/user/$uid' XDG_SE
 XINITRCEOF
 chmod +x /usr/local/bin/shimboot-xinitrc
 
+cat > /usr/local/bin/shimboot-mdev-scan << 'MDEVSCANEOF'
+#!/bin/sh
+
+# Alpine-style device population for shimboot.
+# Upstream Alpine shimboot uses OpenRC+mdev, and mdev is more tolerant of the
+# ChromeOS shim kernel than udev/systemd-tmpfiles on some devices.
+
+log=/run/shimboot-mdev.log
+mkdir -p /run /dev
+: > "$log"
+
+find_busybox() {
+    for bb in /bootloader/bin/busybox /bin/busybox /usr/bin/busybox; do
+        [ -x "$bb" ] && { echo "$bb"; return 0; }
+    done
+    return 1
+}
+
+bb="$(find_busybox || true)"
+if [ -z "$bb" ]; then
+    echo "busybox not found" >> "$log"
+    exit 0
+fi
+
+# Match Alpine's mdev behavior: let mdev service future hotplug events, then
+# scan current sysfs devices. Keep this best-effort so boot never blocks.
+if [ -w /proc/sys/kernel/hotplug ]; then
+    echo "$bb mdev" > /proc/sys/kernel/hotplug 2>>"$log" || true
+fi
+
+"$bb" mdev -s >>"$log" 2>&1 || true
+
+# Make sure common directories/symlinks exist even with minimal mdev configs.
+mkdir -p /dev/input /dev/dri /dev/snd /dev/pts /dev/shm
+[ -e /dev/fd ] || ln -s /proc/self/fd /dev/fd 2>/dev/null || true
+[ -e /dev/stdin ] || ln -s /proc/self/fd/0 /dev/stdin 2>/dev/null || true
+[ -e /dev/stdout ] || ln -s /proc/self/fd/1 /dev/stdout 2>/dev/null || true
+[ -e /dev/stderr ] || ln -s /proc/self/fd/2 /dev/stderr 2>/dev/null || true
+
+ls -la /dev/input >>"$log" 2>&1 || true
+exit 0
+MDEVSCANEOF
+chmod +x /usr/local/bin/shimboot-mdev-scan
+
+cat > /etc/init.d/shimboot-mdev << 'MDEVSERVICEEOF'
+#!/sbin/openrc-run
+
+description="Populate /dev using busybox mdev for shimboot"
+command="/usr/local/bin/shimboot-mdev-scan"
+
+depend() {
+    need devfs sysfs
+    before udev udev-trigger modules shimboot-hwmods shimboot-xfce
+}
+MDEVSERVICEEOF
+chmod +x /etc/init.d/shimboot-mdev
+rm -f /etc/runlevels/*/shimboot-mdev 2>/dev/null || true
+rc-update add shimboot-mdev sysinit 2>/dev/null || true
+
 cat > /usr/local/bin/shimboot-load-hwmods << 'HWMODSEOF'
 #!/bin/sh
 
@@ -619,11 +679,14 @@ for dev in /sys/bus/i2c/drivers/elan_i2c/i2c-* /sys/bus/i2c/drivers/elants_i2c/i
     echo "$name" > /sys/bus/i2c/drivers/i2c_hid_acpi/bind 2>>"$log" || true
 done
 
-# Re-trigger device creation for input after the modules are present.
+# Populate /dev Alpine-style after modules are loaded, then also ask udev if it
+# is running. This covers both mdev-created nodes and udev-managed permissions.
+/usr/local/bin/shimboot-mdev-scan >>"$log" 2>&1 || true
 udevadm trigger --subsystem-match=input --action=add >>"$log" 2>&1 || true
 udevadm trigger --subsystem-match=hid --action=add >>"$log" 2>&1 || true
 udevadm trigger --subsystem-match=i2c --action=add >>"$log" 2>&1 || true
 udevadm settle --timeout=10 >>"$log" 2>&1 || true
+/usr/local/bin/shimboot-mdev-scan >>"$log" 2>&1 || true
 
 ls -la /dev/input >>"$log" 2>&1 || true
 cat /proc/bus/input/devices >>"$log" 2>&1 || true
@@ -639,8 +702,8 @@ description="Load Chromebook hardware/input modules for shimboot"
 command="/usr/local/bin/shimboot-load-hwmods"
 
 depend() {
-    need udev
-    after udev-trigger modules
+    need devfs sysfs shimboot-mdev
+    after shimboot-mdev modules
     before display-manager xdm shimboot-xfce
 }
 HWMODSSERVICEEOF
@@ -782,6 +845,7 @@ chmod +x /etc/init.d/shimboot-xfce
 # Avoid display-manager/xdm races and blank greeter failures. They are left
 # installed for manual debugging, but shimboot-xfce is the default graphical path.
 rm -f /etc/runlevels/*/display-manager /etc/runlevels/*/xdm /etc/runlevels/*/kill-frecon /etc/runlevels/*/shimboot-xfce-fallback /etc/runlevels/*/shimboot-xfce 2>/dev/null || true
+rc-update add shimboot-mdev sysinit 2>/dev/null || true
 rc-update add shimboot-hwmods default 2>/dev/null || true
 rc-update add shimboot-xfce default 2>/dev/null || true
 

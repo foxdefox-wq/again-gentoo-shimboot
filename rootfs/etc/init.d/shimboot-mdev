@@ -1,0 +1,9 @@
+#!/sbin/openrc-run
+
+description="Populate /dev using busybox mdev for shimboot"
+command="/usr/local/bin/shimboot-mdev-scan"
+
+depend() {
+    need devfs sysfs
+    before udev udev-trigger modules shimboot-hwmods shimboot-xfce
+}
