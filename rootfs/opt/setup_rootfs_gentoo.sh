@@ -189,6 +189,7 @@ sys-auth/polkit elogind
 sys-fs/udisks elogind
 x11-misc/lightdm elogind
 x11-drivers/xf86-input-libinput udev
+sys-apps/systemd-utils udev kmod tmpfiles acl
 x11-base/xorg-drivers input_devices_libinput input_devices_evdev input_devices_synaptics
 x11-base/xorg-server udev
 media-libs/mesa X
@@ -255,6 +256,8 @@ essential_packages=(
   sys-fs/udisks
   sys-block/zram-init
   app-shells/bash-completion
+  sys-apps/kmod
+  sys-apps/systemd-utils
   gui-libs/display-manager-init
   x11-apps/xinit
   x11-apps/xauth
@@ -440,6 +443,25 @@ NETEOF
 
 # Zram
 [ -x /etc/init.d/zram-init ] && rc-update add zram-init boot 2>/dev/null || true
+
+# Unblock radios before NetworkManager starts.
+cat > /etc/init.d/shimboot-rfkill << 'RFKILLEOF'
+#!/sbin/openrc-run
+description="Unblock Chromebook radios"
+command=/bin/true
+
+depend() {
+    before NetworkManager
+}
+
+start() {
+    ebegin "Unblocking rfkill devices"
+    rfkill unblock all 2>/dev/null || true
+    eend 0
+}
+RFKILLEOF
+chmod +x /etc/init.d/shimboot-rfkill
+rc-update add shimboot-rfkill default 2>/dev/null || true
 
 # Frecon must release /dev/console before Xorg/LightDM can take over the display.
 mkdir -p /usr/local/bin
@@ -826,9 +848,9 @@ HWMODSSERVICEEOF
 chmod +x /etc/init.d/shimboot-hwmods
 rm -f /etc/runlevels/*/shimboot-hwmods 2>/dev/null || true
 
-# Kill frecon helper service. It runs in the default runlevel immediately before
-# the display manager, not in boot, so the visible console is released only when
-# X/LightDM is about to start.
+# Kill frecon immediately before the display manager. This is exactly the
+# upstream shimboot behavior: unmount /dev/console and kill frecon so X can own
+# the display.
 cat > /etc/init.d/kill-frecon << 'FRECONEOF'
 #!/sbin/openrc-run
 description="Release ChromeOS frecon console for Xorg"
@@ -963,8 +985,9 @@ stop() {
 SHIMBOOTXFCEEOF
 chmod +x /etc/init.d/shimboot-xfce
 
-# Avoid display-manager/xdm races and blank greeter failures. They are left
-# installed for manual debugging, but shimboot-xfce is the default graphical path.
+# Use Gentoo's display-manager/LightDM path like upstream shimboot's Debian
+# image. Direct shimboot-xfce remains installed for rescue/manual debugging, but
+# root-run X has unreliable input ACLs on OpenRC.
 rm -f /etc/runlevels/*/display-manager /etc/runlevels/*/xdm /etc/runlevels/*/kill-frecon /etc/runlevels/*/shimboot-xfce-fallback /etc/runlevels/*/shimboot-xfce 2>/dev/null || true
 rc-update add devfs sysinit 2>/dev/null || true
 [ -x /etc/init.d/hwdrivers ] && rc-update add hwdrivers sysinit 2>/dev/null || true
@@ -973,9 +996,15 @@ for level in sysinit boot default nonetwork; do
   rc-update del shimboot-mdev "$level" 2>/dev/null || true
   rc-update del shimboot-hwmods "$level" 2>/dev/null || true
   rc-update del local "$level" 2>/dev/null || true
+  rc-update del shimboot-xfce "$level" 2>/dev/null || true
 done
-rm -f /etc/runlevels/*/mdev /etc/runlevels/*/shimboot-mdev /etc/runlevels/*/shimboot-hwmods /etc/runlevels/*/local 2>/dev/null || true
-rc-update add shimboot-xfce default 2>/dev/null || true
+rm -f /etc/runlevels/*/mdev /etc/runlevels/*/shimboot-mdev /etc/runlevels/*/shimboot-hwmods /etc/runlevels/*/local /etc/runlevels/*/shimboot-xfce 2>/dev/null || true
+rc-update add kill-frecon default 2>/dev/null || true
+if [ -x /etc/init.d/display-manager ]; then
+  rc-update add display-manager default 2>/dev/null || true
+else
+  rc-update add xdm default 2>/dev/null || true
+fi
 
 # Configure LightDM
 print_info "Configuring LightDM..."
