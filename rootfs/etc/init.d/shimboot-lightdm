@@ -1,0 +1,26 @@
+#!/sbin/openrc-run
+
+description="Start LightDM for shimboot Gentoo"
+command="/usr/local/bin/shimboot-run-lightdm"
+command_background="yes"
+pidfile="/run/shimboot-lightdm.pid"
+
+depend() {
+    need localmount dbus
+    after bootmisc modules elogind NetworkManager
+    use elogind
+}
+
+start_pre() {
+    mkdir -p /run /var/log /var/log/lightdm /run/lightdm
+    rm -f /run/shimboot-lightdm.pid /tmp/.X0-lock /tmp/.X11-unix/X0 2>/dev/null || true
+}
+
+stop() {
+    ebegin "Stopping LightDM"
+    start-stop-daemon --stop --quiet --retry TERM/5/KILL/5 --pidfile "$pidfile" 2>/dev/null || true
+    pkill -9 lightdm 2>/dev/null || true
+    pkill -9 lightdm-gtk-greeter 2>/dev/null || true
+    pkill -9 Xorg 2>/dev/null || true
+    eend 0
+}

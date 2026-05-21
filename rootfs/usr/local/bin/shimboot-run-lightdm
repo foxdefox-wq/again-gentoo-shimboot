@@ -1,0 +1,31 @@
+#!/bin/sh
+
+log=/var/log/shimboot-lightdm.log
+mkdir -p /var/log/lightdm /run/lightdm /tmp/.X11-unix
+chmod 1777 /tmp /tmp/.X11-unix 2>/dev/null || true
+chown root:lightdm /run/lightdm /var/log/lightdm 2>/dev/null || true
+chmod 755 /run/lightdm /var/log/lightdm 2>/dev/null || true
+
+echo "$(date): preparing display for LightDM" >> "$log"
+
+# Upstream shimboot does exactly this before the display manager starts.
+/usr/local/bin/kill_frecon >> "$log" 2>&1 || true
+
+# OpenRC/logind ACL fallback: make input readable to X/greeter.
+mkdir -p /dev/input
+chgrp -R input /dev/input 2>>"$log" || true
+chmod a+rw /dev/input/event* /dev/input/mouse* /dev/input/mice /dev/input/js* 2>>"$log" || true
+
+# Clean stale X sockets/locks from previous failed attempts.
+rm -f /tmp/.X0-lock /tmp/.X11-unix/X0 2>/dev/null || true
+
+if [ -x /usr/bin/lightdm ]; then
+    echo "$(date): exec /usr/bin/lightdm" >> "$log"
+    exec /usr/bin/lightdm >> "$log" 2>&1
+elif [ -x /usr/sbin/lightdm ]; then
+    echo "$(date): exec /usr/sbin/lightdm" >> "$log"
+    exec /usr/sbin/lightdm >> "$log" 2>&1
+else
+    echo "$(date): lightdm binary not found" >> "$log"
+    exit 1
+fi

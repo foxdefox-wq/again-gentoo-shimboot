@@ -985,10 +985,10 @@ stop() {
 SHIMBOOTXFCEEOF
 chmod +x /etc/init.d/shimboot-xfce
 
-# Use Gentoo's display-manager/LightDM path like upstream shimboot's Debian
-# image. Direct shimboot-xfce remains installed for rescue/manual debugging, but
-# root-run X has unreliable input ACLs on OpenRC.
-rm -f /etc/runlevels/*/display-manager /etc/runlevels/*/xdm /etc/runlevels/*/kill-frecon /etc/runlevels/*/shimboot-xfce-fallback /etc/runlevels/*/shimboot-xfce 2>/dev/null || true
+# Start LightDM with a shimboot-specific wrapper that kills frecon and then
+# execs LightDM in the same service. This avoids OpenRC ordering races where
+# kill-frecon runs but display-manager never follows.
+rm -f /etc/runlevels/*/display-manager /etc/runlevels/*/xdm /etc/runlevels/*/kill-frecon /etc/runlevels/*/shimboot-xfce-fallback /etc/runlevels/*/shimboot-xfce /etc/runlevels/*/shimboot-lightdm 2>/dev/null || true
 rc-update add devfs sysinit 2>/dev/null || true
 [ -x /etc/init.d/hwdrivers ] && rc-update add hwdrivers sysinit 2>/dev/null || true
 for level in sysinit boot default nonetwork; do
@@ -997,14 +997,77 @@ for level in sysinit boot default nonetwork; do
   rc-update del shimboot-hwmods "$level" 2>/dev/null || true
   rc-update del local "$level" 2>/dev/null || true
   rc-update del shimboot-xfce "$level" 2>/dev/null || true
+  rc-update del display-manager "$level" 2>/dev/null || true
+  rc-update del xdm "$level" 2>/dev/null || true
+  rc-update del kill-frecon "$level" 2>/dev/null || true
 done
-rm -f /etc/runlevels/*/mdev /etc/runlevels/*/shimboot-mdev /etc/runlevels/*/shimboot-hwmods /etc/runlevels/*/local /etc/runlevels/*/shimboot-xfce 2>/dev/null || true
-rc-update add kill-frecon default 2>/dev/null || true
-if [ -x /etc/init.d/display-manager ]; then
-  rc-update add display-manager default 2>/dev/null || true
+rm -f /etc/runlevels/*/mdev /etc/runlevels/*/shimboot-mdev /etc/runlevels/*/shimboot-hwmods /etc/runlevels/*/local /etc/runlevels/*/shimboot-xfce /etc/runlevels/*/display-manager /etc/runlevels/*/xdm /etc/runlevels/*/kill-frecon 2>/dev/null || true
+
+cat > /usr/local/bin/shimboot-run-lightdm << 'RUNLIGHTDMEOF'
+#!/bin/sh
+
+log=/var/log/shimboot-lightdm.log
+mkdir -p /var/log/lightdm /run/lightdm /tmp/.X11-unix
+chmod 1777 /tmp /tmp/.X11-unix 2>/dev/null || true
+chown root:lightdm /run/lightdm /var/log/lightdm 2>/dev/null || true
+chmod 755 /run/lightdm /var/log/lightdm 2>/dev/null || true
+
+echo "$(date): preparing display for LightDM" >> "$log"
+
+# Upstream shimboot does exactly this before the display manager starts.
+/usr/local/bin/kill_frecon >> "$log" 2>&1 || true
+
+# OpenRC/logind ACL fallback: make input readable to X/greeter.
+mkdir -p /dev/input
+chgrp -R input /dev/input 2>>"$log" || true
+chmod a+rw /dev/input/event* /dev/input/mouse* /dev/input/mice /dev/input/js* 2>>"$log" || true
+
+# Clean stale X sockets/locks from previous failed attempts.
+rm -f /tmp/.X0-lock /tmp/.X11-unix/X0 2>/dev/null || true
+
+if [ -x /usr/bin/lightdm ]; then
+    echo "$(date): exec /usr/bin/lightdm" >> "$log"
+    exec /usr/bin/lightdm >> "$log" 2>&1
+elif [ -x /usr/sbin/lightdm ]; then
+    echo "$(date): exec /usr/sbin/lightdm" >> "$log"
+    exec /usr/sbin/lightdm >> "$log" 2>&1
 else
-  rc-update add xdm default 2>/dev/null || true
+    echo "$(date): lightdm binary not found" >> "$log"
+    exit 1
 fi
+RUNLIGHTDMEOF
+chmod +x /usr/local/bin/shimboot-run-lightdm
+
+cat > /etc/init.d/shimboot-lightdm << 'LIGHTDMSERVICEEOF'
+#!/sbin/openrc-run
+
+description="Start LightDM for shimboot Gentoo"
+command="/usr/local/bin/shimboot-run-lightdm"
+command_background="yes"
+pidfile="/run/shimboot-lightdm.pid"
+
+depend() {
+    need localmount dbus
+    after bootmisc modules elogind NetworkManager
+    use elogind
+}
+
+start_pre() {
+    mkdir -p /run /var/log /var/log/lightdm /run/lightdm
+    rm -f /run/shimboot-lightdm.pid /tmp/.X0-lock /tmp/.X11-unix/X0 2>/dev/null || true
+}
+
+stop() {
+    ebegin "Stopping LightDM"
+    start-stop-daemon --stop --quiet --retry TERM/5/KILL/5 --pidfile "$pidfile" 2>/dev/null || true
+    pkill -9 lightdm 2>/dev/null || true
+    pkill -9 lightdm-gtk-greeter 2>/dev/null || true
+    pkill -9 Xorg 2>/dev/null || true
+    eend 0
+}
+LIGHTDMSERVICEEOF
+chmod +x /etc/init.d/shimboot-lightdm
+rc-update add shimboot-lightdm default 2>/dev/null || true
 
 # Configure LightDM
 print_info "Configuring LightDM..."
