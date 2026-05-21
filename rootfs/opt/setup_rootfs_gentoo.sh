@@ -382,13 +382,12 @@ print_info "Configuring OpenRC services..."
 
 # Core OpenRC boot services. Add only if the service exists so this remains
 # compatible across Gentoo stage3 snapshots.
-# Preserve /dev from the shimboot initramfs. The bootloader moves /dev into the
-# rootfs before OpenRC starts; remounting devfs/devtmpfs can drop the ChromeOS
-# input device nodes that frecon was already using.
-for svc in devfs mdev shimboot-mdev; do
+# Match upstream shimboot's systemd/devtmpfs behavior with OpenRC equivalents:
+# devfs creates /dev nodes, then udev/udev-trigger applies properties/permissions.
+for svc in mdev shimboot-mdev; do
   rc-update del "$svc" sysinit 2>/dev/null || true
 done
-for svc in sysfs procfs dmesg udev udev-trigger; do
+for svc in devfs sysfs procfs dmesg udev udev-trigger; do
   [ -x "/etc/init.d/$svc" ] && rc-update add "$svc" sysinit 2>/dev/null || true
 done
 for svc in modules hwclock sysctl hostname bootmisc localmount swap; do
@@ -513,6 +512,20 @@ Section "InputClass"
     Driver "evdev"
 EndSection
 EVDEVEOF
+
+cat > /etc/X11/xorg.conf.d/10-shimboot-serverflags.conf << 'SERVERFLAGSEOF'
+Section "ServerFlags"
+    Option "AutoAddDevices" "true"
+    Option "AutoEnableDevices" "true"
+EndSection
+SERVERFLAGSEOF
+
+mkdir -p /etc/udev/rules.d
+cat > /etc/udev/rules.d/99-shimboot-input.rules << 'UDEVRULESEOF'
+KERNEL=="event*", SUBSYSTEM=="input", GROUP="input", MODE="0666"
+KERNEL=="mouse*", SUBSYSTEM=="input", GROUP="input", MODE="0666"
+KERNEL=="js*", SUBSYSTEM=="input", GROUP="input", MODE="0666"
+UDEVRULESEOF
 
 cat > /usr/local/bin/shimboot-xinitrc << 'XINITRCEOF'
 #!/bin/sh
@@ -713,6 +726,13 @@ udevadm trigger --subsystem-match=i2c --action=add >>"$log" 2>&1 || true
 udevadm settle --timeout=10 >>"$log" 2>&1 || true
 /usr/local/bin/shimboot-mdev-scan >>"$log" 2>&1 || true
 
+# Be deliberately permissive: shimboot's Debian path relies on systemd/logind
+# ACLs. On OpenRC, make input nodes readable by X no matter whether X is root,
+# rootless, libinput, or evdev.
+mkdir -p /dev/input
+chgrp -R input /dev/input 2>>"$log" || true
+chmod a+rw /dev/input/event* /dev/input/mouse* /dev/input/js* 2>>"$log" || true
+
 ls -la /dev/input >>"$log" 2>&1 || true
 cat /proc/bus/input/devices >>"$log" 2>&1 || true
 
@@ -832,6 +852,12 @@ start() {
     # starting X, not earlier in boot.
     /usr/local/bin/kill_frecon >> "$_log" 2>&1 || true
 
+    # Match systemd/logind ACL behavior from upstream shimboot by ensuring X can
+    # read input devices under OpenRC.
+    mkdir -p /dev/input
+    chgrp -R input /dev/input 2>>"$_log" || true
+    chmod a+rw /dev/input/event* /dev/input/mouse* /dev/input/js* 2>>"$_log" || true
+
     if [ ! -x /usr/bin/xinit ]; then
         echo "xinit is missing" >> "$_log"
         eend 1
@@ -870,7 +896,7 @@ chmod +x /etc/init.d/shimboot-xfce
 # Avoid display-manager/xdm races and blank greeter failures. They are left
 # installed for manual debugging, but shimboot-xfce is the default graphical path.
 rm -f /etc/runlevels/*/display-manager /etc/runlevels/*/xdm /etc/runlevels/*/kill-frecon /etc/runlevels/*/shimboot-xfce-fallback /etc/runlevels/*/shimboot-xfce 2>/dev/null || true
-rc-update del devfs sysinit 2>/dev/null || true
+rc-update add devfs sysinit 2>/dev/null || true
 rc-update del mdev sysinit 2>/dev/null || true
 rc-update del shimboot-mdev sysinit 2>/dev/null || true
 rc-update add shimboot-hwmods default 2>/dev/null || true

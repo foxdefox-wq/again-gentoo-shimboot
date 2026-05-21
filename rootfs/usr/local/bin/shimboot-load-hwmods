@@ -103,6 +103,13 @@ udevadm trigger --subsystem-match=i2c --action=add >>"$log" 2>&1 || true
 udevadm settle --timeout=10 >>"$log" 2>&1 || true
 /usr/local/bin/shimboot-mdev-scan >>"$log" 2>&1 || true
 
+# Be deliberately permissive: shimboot's Debian path relies on systemd/logind
+# ACLs. On OpenRC, make input nodes readable by X no matter whether X is root,
+# rootless, libinput, or evdev.
+mkdir -p /dev/input
+chgrp -R input /dev/input 2>>"$log" || true
+chmod a+rw /dev/input/event* /dev/input/mouse* /dev/input/js* 2>>"$log" || true
+
 ls -la /dev/input >>"$log" 2>&1 || true
 cat /proc/bus/input/devices >>"$log" 2>&1 || true
 

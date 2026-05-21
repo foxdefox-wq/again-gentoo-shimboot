@@ -22,6 +22,12 @@ start() {
     # starting X, not earlier in boot.
     /usr/local/bin/kill_frecon >> "$_log" 2>&1 || true
 
+    # Match systemd/logind ACL behavior from upstream shimboot by ensuring X can
+    # read input devices under OpenRC.
+    mkdir -p /dev/input
+    chgrp -R input /dev/input 2>>"$_log" || true
+    chmod a+rw /dev/input/event* /dev/input/mouse* /dev/input/js* 2>>"$_log" || true
+
     if [ ! -x /usr/bin/xinit ]; then
         echo "xinit is missing" >> "$_log"
         eend 1
