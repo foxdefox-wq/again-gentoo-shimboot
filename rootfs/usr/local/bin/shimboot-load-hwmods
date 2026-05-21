@@ -1,0 +1,62 @@
+#!/bin/sh
+
+# Best-effort hardware module loader for Chromebook/ChromeOS kernels.
+# ChromeOS shims often have board input devices (keyboard/touchpad/touchscreen)
+# behind cros_ec, I2C-HID, and vendor touch modules that generic distro udev
+# does not always autoload early enough for Xorg/libinput.
+
+log=/run/shimboot-hwmods.log
+mkdir -p /run
+: > "$log"
+
+load_mod() {
+    mod="$1"
+    if modprobe -q "$mod" 2>>"$log"; then
+        echo "loaded $mod" >>"$log"
+    else
+        echo "skip $mod" >>"$log"
+    fi
+}
+
+# Buses / pinctrl / low-power-subsystem glue used by Intel Chromebooks.
+for mod in \
+    pinctrl_geminilake pinctrl_jasperlake pinctrl_cannonlake pinctrl_tigerlake \
+    intel_lpss intel_lpss_pci intel_lpss_acpi \
+    i2c_i801 i2c_designware_core i2c_designware_pci i2c_designware_platform \
+    spi_pxa2xx_platform; do
+    load_mod "$mod"
+done
+
+# ChromeOS Embedded Controller and Chromebook-specific input devices.
+for mod in \
+    cros_ec cros_ec_lpcs cros_ec_i2c cros_ec_spi cros_ec_proto \
+    cros_ec_keyb cros_ec_buttons cros_ec_sensors cros_usbpd_charger \
+    chromeos_laptop cros_kbd_led_backlight \
+    intel_hid intel_vbtn gpio_keys soc_button_array; do
+    load_mod "$mod"
+done
+
+# HID/input/touchpad/touchscreen stack.
+for mod in \
+    hid hid_generic usbhid hid_multitouch \
+    i2c_hid i2c_hid_acpi \
+    atmel_mxt_ts elants_i2c elan_i2c cyapa \
+    i8042 atkbd psmouse serio_raw uinput evdev; do
+    load_mod "$mod"
+done
+
+# Load any copied ChromeOS module-load hints too, but keep this non-fatal.
+for conf in /etc/modules-load.d/*.conf; do
+    [ -f "$conf" ] || continue
+    while IFS= read -r mod _args; do
+        case "$mod" in ''|'#'*) continue ;; esac
+        load_mod "$mod"
+    done < "$conf"
+done
+
+# Re-trigger device creation for input after the modules are present.
+udevadm trigger --subsystem-match=input --action=add >>"$log" 2>&1 || true
+udevadm trigger --subsystem-match=hid --action=add >>"$log" 2>&1 || true
+udevadm settle --timeout=10 >>"$log" 2>&1 || true
+
+exit 0

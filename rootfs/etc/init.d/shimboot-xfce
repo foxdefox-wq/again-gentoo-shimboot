@@ -6,8 +6,8 @@ _log="/var/log/shimboot-xfce.log"
 _user="${SHIMBOOT_XFCE_USER:-user}"
 
 depend() {
-    need localmount dbus
-    after bootmisc modules elogind
+    need localmount dbus shimboot-hwmods
+    after bootmisc modules elogind shimboot-hwmods
     use elogind
 }
 

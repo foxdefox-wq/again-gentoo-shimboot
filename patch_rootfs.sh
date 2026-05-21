@@ -27,18 +27,27 @@ copy_modules() {
 
   mkdir -p "${target_rootfs}/lib/modprobe.d/"
   mkdir -p "${target_rootfs}/etc/modprobe.d/"
-  cp -r "${reco_rootfs}/lib/modprobe.d/"* "${target_rootfs}/lib/modprobe.d/"
-  cp -r "${reco_rootfs}/etc/modprobe.d/"* "${target_rootfs}/etc/modprobe.d/"
+  cp -r "${reco_rootfs}/lib/modprobe.d/"* "${target_rootfs}/lib/modprobe.d/" 2>/dev/null || true
+  cp -r "${reco_rootfs}/etc/modprobe.d/"* "${target_rootfs}/etc/modprobe.d/" 2>/dev/null || true
+
+  # Preserve ChromeOS module-load hints. Gentoo's shimboot-hwmods service reads
+  # these and loads board-specific input/touchpad/touchscreen modules best-effort.
+  mkdir -p "${target_rootfs}/etc/modules-load.d/"
+  cp -r "${shim_rootfs}/etc/modules-load.d/"* "${target_rootfs}/etc/modules-load.d/" 2>/dev/null || true
+  cp -r "${reco_rootfs}/etc/modules-load.d/"* "${target_rootfs}/etc/modules-load.d/" 2>/dev/null || true
 
   #decompress kernel modules if necessary - debian won't recognize these otherwise
   local compressed_files="$(find "${target_rootfs}/lib/modules" -name '*.gz')"
   if [ "$compressed_files" ]; then
     echo "$compressed_files" | xargs gunzip
-    for kernel_dir in "$target_rootfs/lib/modules/"*; do
-      local version="$(basename "$kernel_dir")"
-      depmod -b "$target_rootfs" "$version"
-    done
   fi
+
+  # Always regenerate module dependency metadata after merging ChromeOS modules.
+  for kernel_dir in "$target_rootfs/lib/modules/"*; do
+    [ -d "$kernel_dir" ] || continue
+    local version="$(basename "$kernel_dir")"
+    depmod -b "$target_rootfs" "$version" || true
+  done
 }
 
 copy_firmware() {

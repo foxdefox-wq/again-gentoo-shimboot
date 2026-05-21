@@ -458,6 +458,36 @@ Section "Device"
 EndSection
 XORGEOF
 
+cat > /etc/X11/xorg.conf.d/40-libinput.conf << 'LIBINPUTEOF'
+Section "InputClass"
+    Identifier "libinput keyboard catchall"
+    MatchIsKeyboard "on"
+    MatchDevicePath "/dev/input/event*"
+    Driver "libinput"
+EndSection
+
+Section "InputClass"
+    Identifier "libinput pointer catchall"
+    MatchIsPointer "on"
+    MatchDevicePath "/dev/input/event*"
+    Driver "libinput"
+EndSection
+
+Section "InputClass"
+    Identifier "libinput touchpad catchall"
+    MatchIsTouchpad "on"
+    MatchDevicePath "/dev/input/event*"
+    Driver "libinput"
+EndSection
+
+Section "InputClass"
+    Identifier "libinput touchscreen catchall"
+    MatchIsTouchscreen "on"
+    MatchDevicePath "/dev/input/event*"
+    Driver "libinput"
+EndSection
+LIBINPUTEOF
+
 cat > /usr/local/bin/shimboot-xinitrc << 'XINITRCEOF'
 #!/bin/sh
 user="${SHIMBOOT_XFCE_USER:-user}"
@@ -474,6 +504,88 @@ export DISPLAY="${DISPLAY:-:0}"
 exec su - "$user" -c "DISPLAY='$DISPLAY' XDG_RUNTIME_DIR='/run/user/$uid' XDG_SESSION_TYPE=x11 DESKTOP_SESSION=xfce XDG_CURRENT_DESKTOP=XFCE dbus-run-session -- startxfce4"
 XINITRCEOF
 chmod +x /usr/local/bin/shimboot-xinitrc
+
+cat > /usr/local/bin/shimboot-load-hwmods << 'HWMODSEOF'
+#!/bin/sh
+
+# Best-effort hardware module loader for Chromebook/ChromeOS kernels.
+# ChromeOS shims often have board input devices (keyboard/touchpad/touchscreen)
+# behind cros_ec, I2C-HID, and vendor touch modules that generic distro udev
+# does not always autoload early enough for Xorg/libinput.
+
+log=/run/shimboot-hwmods.log
+mkdir -p /run
+: > "$log"
+
+load_mod() {
+    mod="$1"
+    if modprobe -q "$mod" 2>>"$log"; then
+        echo "loaded $mod" >>"$log"
+    else
+        echo "skip $mod" >>"$log"
+    fi
+}
+
+# Buses / pinctrl / low-power-subsystem glue used by Intel Chromebooks.
+for mod in \
+    pinctrl_geminilake pinctrl_jasperlake pinctrl_cannonlake pinctrl_tigerlake \
+    intel_lpss intel_lpss_pci intel_lpss_acpi \
+    i2c_i801 i2c_designware_core i2c_designware_pci i2c_designware_platform \
+    spi_pxa2xx_platform; do
+    load_mod "$mod"
+done
+
+# ChromeOS Embedded Controller and Chromebook-specific input devices.
+for mod in \
+    cros_ec cros_ec_lpcs cros_ec_i2c cros_ec_spi cros_ec_proto \
+    cros_ec_keyb cros_ec_buttons cros_ec_sensors cros_usbpd_charger \
+    chromeos_laptop cros_kbd_led_backlight \
+    intel_hid intel_vbtn gpio_keys soc_button_array; do
+    load_mod "$mod"
+done
+
+# HID/input/touchpad/touchscreen stack.
+for mod in \
+    hid hid_generic usbhid hid_multitouch \
+    i2c_hid i2c_hid_acpi \
+    atmel_mxt_ts elants_i2c elan_i2c cyapa \
+    i8042 atkbd psmouse serio_raw uinput evdev; do
+    load_mod "$mod"
+done
+
+# Load any copied ChromeOS module-load hints too, but keep this non-fatal.
+for conf in /etc/modules-load.d/*.conf; do
+    [ -f "$conf" ] || continue
+    while IFS= read -r mod _args; do
+        case "$mod" in ''|'#'*) continue ;; esac
+        load_mod "$mod"
+    done < "$conf"
+done
+
+# Re-trigger device creation for input after the modules are present.
+udevadm trigger --subsystem-match=input --action=add >>"$log" 2>&1 || true
+udevadm trigger --subsystem-match=hid --action=add >>"$log" 2>&1 || true
+udevadm settle --timeout=10 >>"$log" 2>&1 || true
+
+exit 0
+HWMODSEOF
+chmod +x /usr/local/bin/shimboot-load-hwmods
+
+cat > /etc/init.d/shimboot-hwmods << 'HWMODSSERVICEEOF'
+#!/sbin/openrc-run
+
+description="Load Chromebook hardware/input modules for shimboot"
+command="/usr/local/bin/shimboot-load-hwmods"
+
+depend() {
+    need udev
+    after udev-trigger modules
+    before display-manager xdm shimboot-xfce
+}
+HWMODSSERVICEEOF
+chmod +x /etc/init.d/shimboot-hwmods
+rm -f /etc/runlevels/*/shimboot-hwmods 2>/dev/null || true
+rc-update add shimboot-hwmods default 2>/dev/null || true
 
 # Kill frecon helper service. It runs in the default runlevel immediately before
 # the display manager, not in boot, so the visible console is released only when
@@ -555,8 +667,8 @@ _log="/var/log/shimboot-xfce.log"
 _user="${SHIMBOOT_XFCE_USER:-user}"
 
 depend() {
-    need localmount dbus
-    after bootmisc modules elogind
+    need localmount dbus shimboot-hwmods
+    after bootmisc modules elogind shimboot-hwmods
     use elogind
 }
 
@@ -596,6 +708,7 @@ chmod +x /etc/init.d/shimboot-xfce
 # Avoid display-manager/xdm races and blank greeter failures. They are left
 # installed for manual debugging, but shimboot-xfce is the default graphical path.
 rm -f /etc/runlevels/*/display-manager /etc/runlevels/*/xdm /etc/runlevels/*/kill-frecon /etc/runlevels/*/shimboot-xfce-fallback /etc/runlevels/*/shimboot-xfce 2>/dev/null || true
+rc-update add shimboot-hwmods default 2>/dev/null || true
 rc-update add shimboot-xfce default 2>/dev/null || true
 
 # Configure LightDM
@@ -702,6 +815,33 @@ if [ -d /etc/modules-load.d ]; then
     fi
   done
 fi
+
+# Add a broad Chromebook input hardware module list for shimboot-hwmods.
+# Missing modules are tolerated; ChromeOS module-load hints copied later by
+# patch_rootfs.sh are loaded by shimboot-hwmods too.
+cat > /etc/modules-load.d/shimboot-hardware.conf << 'HWMODULESEOF'
+cros_ec
+cros_ec_lpcs
+cros_ec_i2c
+cros_ec_spi
+cros_ec_keyb
+cros_ec_buttons
+chromeos_laptop
+hid_generic
+usbhid
+hid_multitouch
+i2c_hid
+i2c_hid_acpi
+atmel_mxt_ts
+elants_i2c
+elan_i2c
+cyapa
+i8042
+atkbd
+psmouse
+serio_raw
+uinput
+HWMODULESEOF
 
 # Clean up. Avoid depclean in strict binpkg mode: if a dependency has no current
 # binpkg, a cleanup pass can turn a successful binary install into a source-build
