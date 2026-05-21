@@ -56,6 +56,16 @@ copy_modules() {
   done
 }
 
+prune_firmware() {
+  local firmware_dir="$1"
+  [ -d "$firmware_dir" ] || return 0
+
+  # Keep Chromebook essentials and prune unrelated firmware so adding upstream
+  # ChromiumOS linux-firmware does not balloon Gentoo images to many GB.
+  find "$firmware_dir" -type f     ! -path "*/intel/*"     ! -path "*/iwlwifi/*"     ! -path "*/rtw88/*"     ! -path "*/rtw89/*"     ! -path "*/rtl_bt/*"     ! -path "*/brcm/*"     ! -path "*/ath10k/*"     ! -path "*/ath11k/*"     ! -path "*/mediatek/*"     ! -path "*/qca/*"     ! -path "*/amdgpu/*"     ! -name "regulatory.db*"     ! -name "*.ucode"     ! -iname "*elan*"     ! -iname "*atmel*"     ! -iname "*mxt*"     ! -iname "*touch*"     -delete 2>/dev/null || true
+  find "$firmware_dir" -type d -empty -delete 2>/dev/null || true
+}
+
 copy_firmware() {
   local firmware_path="/tmp/chromium-firmware"
   local target_rootfs=$(realpath -m $1)
