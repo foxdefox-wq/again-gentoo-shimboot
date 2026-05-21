@@ -1,0 +1,29 @@
+#!/bin/sh
+
+# Started from the autologin user's shell. This gives elogind/PAM a real user
+# session before X starts, which is what upstream Shimboot gets from
+# systemd+LightDM and what root-run OpenRC services do not provide.
+
+[ -n "$DISPLAY" ] && exit 0
+[ -e /tmp/.shimboot-x-started ] && exit 0
+touch /tmp/.shimboot-x-started
+
+log=/var/log/shimboot-user-xfce.log
+mkdir -p /var/log /tmp/.X11-unix
+chmod 1777 /tmp /tmp/.X11-unix 2>/dev/null || true
+
+/usr/local/bin/shimboot-load-hwmods >>"$log" 2>&1 || true
+/usr/local/bin/kill_frecon >>"$log" 2>&1 || true
+
+# Match logind ACL behavior explicitly for OpenRC.
+chgrp -R input /dev/input 2>>"$log" || true
+chmod a+rw /dev/input/event* /dev/input/mouse* /dev/input/mice /dev/input/js* 2>>"$log" || true
+
+export XDG_SESSION_TYPE=x11
+export DESKTOP_SESSION=xfce
+export XDG_CURRENT_DESKTOP=XFCE
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
+
+exec startx /usr/local/bin/shimboot-startxfce -- :0 vt7 -ac -nolisten tcp >>"$log" 2>&1

@@ -448,6 +448,39 @@ STARTXFCEEOF
 chmod +x /usr/local/bin/shimboot-startxfce
 
 # Let the fallback start Xorg as the user even when no physical Linux console
+cat > /usr/local/bin/shimboot-start-user-xfce << 'USERXFCEEOF'
+#!/bin/sh
+
+# Started from the autologin user's shell. This gives elogind/PAM a real user
+# session before X starts, which is what upstream Shimboot gets from
+# systemd+LightDM and what root-run OpenRC services do not provide.
+
+[ -n "$DISPLAY" ] && exit 0
+[ -e /tmp/.shimboot-x-started ] && exit 0
+touch /tmp/.shimboot-x-started
+
+log=/var/log/shimboot-user-xfce.log
+mkdir -p /var/log /tmp/.X11-unix
+chmod 1777 /tmp /tmp/.X11-unix 2>/dev/null || true
+
+/usr/local/bin/shimboot-load-hwmods >>"$log" 2>&1 || true
+/usr/local/bin/kill_frecon >>"$log" 2>&1 || true
+
+# Match logind ACL behavior explicitly for OpenRC.
+chgrp -R input /dev/input 2>>"$log" || true
+chmod a+rw /dev/input/event* /dev/input/mouse* /dev/input/mice /dev/input/js* 2>>"$log" || true
+
+export XDG_SESSION_TYPE=x11
+export DESKTOP_SESSION=xfce
+export XDG_CURRENT_DESKTOP=XFCE
+export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
+
+exec startx /usr/local/bin/shimboot-startxfce -- :0 vt7 -ac -nolisten tcp >>"$log" 2>&1
+USERXFCEEOF
+chmod +x /usr/local/bin/shimboot-start-user-xfce
+
 # login happened first.
 mkdir -p /etc/X11
 cat > /etc/X11/Xwrapper.config << 'XWRAPPEREOF'
@@ -908,7 +941,7 @@ rc-update add devfs sysinit 2>/dev/null || true
 rc-update add mdev sysinit 2>/dev/null || true
 [ -x /etc/init.d/hwdrivers ] && rc-update add hwdrivers sysinit 2>/dev/null || true
 rc-update add shimboot-hwmods default 2>/dev/null || true
-rc-update add shimboot-xfce default 2>/dev/null || true
+rc-update del shimboot-xfce default 2>/dev/null || true
 
 # Configure LightDM
 print_info "Configuring LightDM..."
@@ -994,6 +1027,24 @@ set_password "$username" "$user_passwd"
 if [ -f "/home/$username/.bashrc" ]; then
   if ! grep -q "shimboot_greeter" "/home/$username/.bashrc"; then
     echo '/usr/local/bin/shimboot_greeter 2>/dev/null || true' >> "/home/$username/.bashrc"
+  fi
+fi
+
+# Autologin on tty1 and start XFCE from the user's login shell. This mirrors the
+# important upstream behavior: a real user session exists before X opens input.
+cat > "/home/$username/.bash_profile" << 'BASHPROFILEEOF'
+# shimboot autostart XFCE on first tty login
+if [ -z "$DISPLAY" ] && [ "$(tty 2>/dev/null)" = "/dev/tty1" ]; then
+  exec /usr/local/bin/shimboot-start-user-xfce
+fi
+BASHPROFILEEOF
+chown "$username:$username" "/home/$username/.bash_profile" 2>/dev/null || true
+
+if [ -f /etc/inittab ]; then
+  if grep -q '^c1:' /etc/inittab; then
+    sed -i "s#^c1:.*#c1:12345:respawn:/sbin/agetty --autologin $username --noclear 38400 tty1 linux#" /etc/inittab
+  else
+    echo "c1:12345:respawn:/sbin/agetty --autologin $username --noclear 38400 tty1 linux" >> /etc/inittab
   fi
 fi
 
