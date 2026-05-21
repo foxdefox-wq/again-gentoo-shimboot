@@ -395,6 +395,14 @@ for svc in mount-ro killprocs savecache; do
   [ -x "/etc/init.d/$svc" ] && rc-update add "$svc" shutdown 2>/dev/null || true
 done
 
+# The Gentoo stage3 may include OpenRC's local service in the default runlevel.
+# On shimboot it can hang at "Starting local" before tty autologin ever starts,
+# and we do not use /etc/local.d for anything. Disable it explicitly.
+for level in boot default nonetwork; do
+  rc-update del local "$level" 2>/dev/null || true
+done
+rm -f /etc/runlevels/*/local 2>/dev/null || true
+
 # NetworkManager handles networking. Do not add net.eth0: Chromebooks often do
 # not have an eth0 interface, and OpenRC's net.eth0 service blocks/errors on boot
 # when the interface is absent. Remove stale entries from older builds.
@@ -955,6 +963,10 @@ rc-update add mdev sysinit 2>/dev/null || true
 [ -x /etc/init.d/hwdrivers ] && rc-update add hwdrivers sysinit 2>/dev/null || true
 rc-update add shimboot-hwmods default 2>/dev/null || true
 rc-update del shimboot-xfce default 2>/dev/null || true
+for level in boot default nonetwork; do
+  rc-update del local "$level" 2>/dev/null || true
+done
+rm -f /etc/runlevels/*/local 2>/dev/null || true
 
 # Configure LightDM
 print_info "Configuring LightDM..."
