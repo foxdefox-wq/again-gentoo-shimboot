@@ -246,6 +246,7 @@ emerge_binpkg "Updating base system using binary packages..." --update --deep --
 essential_packages=(
   app-admin/sudo
   net-misc/networkmanager
+  gnome-extra/nm-applet
   sys-process/cronie
   net-wireless/wpa_supplicant
   net-misc/dhcpcd
@@ -435,6 +436,13 @@ NETEOF
 
 # NetworkManager
 [ -x /etc/init.d/NetworkManager ] && rc-update add NetworkManager default 2>/dev/null || true
+mkdir -p /etc/NetworkManager/conf.d
+cat > /etc/NetworkManager/conf.d/any-user.conf << 'NMEOF'
+[main]
+auth-polkit=false
+hostname-mode=none
+NMEOF
+rfkill unblock all 2>/dev/null || true
 
 # Cron
 [ -x /etc/init.d/cronie ] && rc-update add cronie default 2>/dev/null || true
@@ -557,6 +565,7 @@ Section "ServerLayout"
     Screen 0 "Screen0" 0 0
     InputDevice "Keyboard0" "CoreKeyboard"
     InputDevice "Touchpad0" "CorePointer"
+    InputDevice "TouchpadEvdev" "SendCoreEvents"
 EndSection
 
 Section "ServerFlags"
@@ -593,6 +602,19 @@ EndSection
 
 Section "InputDevice"
     Identifier "Touchpad0"
+    Driver "synaptics"
+    Option "Device" "$touchpad"
+    Option "Protocol" "event"
+    Option "GrabEventDevice" "false"
+    Option "TapButton1" "1"
+    Option "TapButton2" "3"
+    Option "TapButton3" "2"
+    Option "VertTwoFingerScroll" "on"
+    Option "HorizTwoFingerScroll" "on"
+EndSection
+
+Section "InputDevice"
+    Identifier "TouchpadEvdev"
     Driver "evdev"
     Option "Device" "$touchpad"
     Option "GrabDevice" "false"
@@ -1095,6 +1117,17 @@ theme-name=Greybird
 icon-theme-name=Adwaita
 background-color=#2e3436
 GREETEREOF
+
+# Autostart NetworkManager applet inside XFCE so Wi-Fi is visible/configurable.
+mkdir -p /etc/xdg/autostart
+cat > /etc/xdg/autostart/nm-applet.desktop << 'NMAEOF'
+[Desktop Entry]
+Type=Application
+Name=NetworkManager Applet
+Exec=nm-applet --sm-disable
+OnlyShowIn=XFCE;
+X-GNOME-Autostart-enabled=true
+NMAEOF
 
 # Configure zram
 print_info "Configuring zram..."

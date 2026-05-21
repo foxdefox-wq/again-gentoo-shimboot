@@ -57,6 +57,7 @@ Section "ServerLayout"
     Screen 0 "Screen0" 0 0
     InputDevice "Keyboard0" "CoreKeyboard"
     InputDevice "Touchpad0" "CorePointer"
+    InputDevice "TouchpadEvdev" "SendCoreEvents"
 EndSection
 
 Section "ServerFlags"
@@ -93,6 +94,19 @@ EndSection
 
 Section "InputDevice"
     Identifier "Touchpad0"
+    Driver "synaptics"
+    Option "Device" "$touchpad"
+    Option "Protocol" "event"
+    Option "GrabEventDevice" "false"
+    Option "TapButton1" "1"
+    Option "TapButton2" "3"
+    Option "TapButton3" "2"
+    Option "VertTwoFingerScroll" "on"
+    Option "HorizTwoFingerScroll" "on"
+EndSection
+
+Section "InputDevice"
+    Identifier "TouchpadEvdev"
     Driver "evdev"
     Option "Device" "$touchpad"
     Option "GrabDevice" "false"
