@@ -1,37 +1,48 @@
 #!/sbin/openrc-run
-# OpenRC init script to start X Display Manager (LightDM)
-# Required for Gentoo shimboot
+# OpenRC init script to start LightDM for Gentoo shimboot
 
 description="X Display Manager (LightDM)"
+pidfile="/run/lightdm.pid"
+command_background="yes"
+
+get_lightdm_command() {
+    if [ -x /usr/bin/lightdm ]; then
+        echo /usr/bin/lightdm
+    elif [ -x /usr/sbin/lightdm ]; then
+        echo /usr/sbin/lightdm
+    else
+        return 1
+    fi
+}
 
 depend() {
-    need localmount
-    after dbus bootmisc
-    use consolekit elogind
+    need localmount dbus
+    after bootmisc modules kill-frecon elogind
+    use elogind
+    provide display-manager
+}
+
+start_pre() {
+    /usr/local/bin/kill_frecon 2>/dev/null || true
+    mkdir -p /run/lightdm /var/log/lightdm
+    chown root:lightdm /run/lightdm /var/log/lightdm 2>/dev/null || true
+    chmod 755 /run/lightdm /var/log/lightdm 2>/dev/null || true
+    command="$(get_lightdm_command)" || return 1
 }
 
 start() {
-    ebegin "Starting LightDM display manager"
-    
-    # Ensure required directories exist
-    mkdir -p /run/lightdm
-    
-    # Set proper permissions
-    chown root:lightdm /run/lightdm 2>/dev/null || true
-    chmod 755 /run/lightdm 2>/dev/null || true
-    
-    # Start LightDM
-    lightdm &
-    
-    eend 0
+    ebegin "Starting LightDM"
+    start_pre || return 1
+    start-stop-daemon --start --quiet --background --make-pidfile \
+        --pidfile "$pidfile" --exec "$command"
+    eend $?
 }
 
 stop() {
-    ebegin "Stopping LightDM display manager"
-    
-    # Kill LightDM and any greeter processes
+    ebegin "Stopping LightDM"
+    start-stop-daemon --stop --quiet --retry TERM/5/KILL/5 \
+        --pidfile "$pidfile" 2>/dev/null || true
     pkill -9 lightdm 2>/dev/null || true
-    pkill -9 lightdm-greeter 2>/dev/null || true
-    
+    pkill -9 lightdm-gtk-greeter 2>/dev/null || true
     eend 0
 }

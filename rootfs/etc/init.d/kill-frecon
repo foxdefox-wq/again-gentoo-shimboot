@@ -1,24 +1,13 @@
 #!/sbin/openrc-run
 # OpenRC init script for kill-frecon
-# Kills ChromeOS frecon processes that interfere with shimboot
+# Kills ChromeOS frecon processes that interfere with shimboot/Xorg
 
-description="Kill ChromeOS frecon processes"
+description="Release ChromeOS frecon console for Xorg"
+command="/usr/local/bin/kill_frecon"
+command_args=""
 
 depend() {
     need localmount
-    after bootmisc
-}
-
-start() {
-    ebegin "Killing ChromeOS frecon processes"
-    
-    # Kill frecon-lite if running
-    if pgrep -x frecon-lite > /dev/null 2>&1; then
-        pkill -9 frecon-lite 2>/dev/null || true
-    fi
-    
-    # Kill any remaining frecon processes
-    pkill -9 frecon 2>/dev/null || true
-    
-    eend 0
+    after bootmisc modules
+    before xdm display-manager
 }

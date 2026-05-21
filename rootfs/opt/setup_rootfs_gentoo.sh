@@ -414,51 +414,85 @@ NETEOF
 # Zram
 [ -x /etc/init.d/zram-init ] && rc-update add zram-init boot 2>/dev/null || true
 
+# Frecon must release /dev/console before Xorg/LightDM can take over the display.
+mkdir -p /usr/local/bin
+cat > /usr/local/bin/kill_frecon << 'KILLFRECONEOF'
+#!/bin/sh
+umount -l /dev/console 2>/dev/null || true
+pkill -9 frecon-lite 2>/dev/null || true
+pkill -9 frecon 2>/dev/null || true
+if [ ! -c /dev/console ]; then
+    rm -f /dev/console 2>/dev/null || true
+    mknod -m 600 /dev/console c 5 1 2>/dev/null || true
+fi
+sleep 1
+exit 0
+KILLFRECONEOF
+chmod +x /usr/local/bin/kill_frecon
+
 # Kill frecon service
 cat > /etc/init.d/kill-frecon << 'FRECONEOF'
 #!/sbin/openrc-run
-description="Kill ChromeOS frecon processes"
+description="Release ChromeOS frecon console for Xorg"
+command="/usr/local/bin/kill_frecon"
 
 depend() {
     need localmount
-    after bootmisc
-}
-
-start() {
-    ebegin "Killing ChromeOS frecon processes"
-    pkill -9 frecon-lite 2>/dev/null || true
-    pkill -9 frecon 2>/dev/null || true
-    eend 0
+    after bootmisc modules
+    before xdm display-manager
 }
 FRECONEOF
 chmod +x /etc/init.d/kill-frecon
 rm -f /etc/runlevels/*/kill-frecon 2>/dev/null || true
 rc-update add kill-frecon boot 2>/dev/null || true
 
-# XDM service for LightDM
+# XDM service for LightDM. Gentoo installs lightdm as /usr/bin/lightdm; keep a
+# /usr/sbin fallback for compatibility with other layouts.
 cat > /etc/init.d/xdm << 'XDMEOF'
 #!/sbin/openrc-run
 description="X Display Manager (LightDM)"
+pidfile="/run/lightdm.pid"
+command_background="yes"
+
+get_lightdm_command() {
+    if [ -x /usr/bin/lightdm ]; then
+        echo /usr/bin/lightdm
+    elif [ -x /usr/sbin/lightdm ]; then
+        echo /usr/sbin/lightdm
+    else
+        return 1
+    fi
+}
 
 depend() {
-    need localmount
-    after dbus bootmisc
+    need localmount dbus
+    after bootmisc modules kill-frecon elogind
     use elogind
+    provide display-manager
+}
+
+start_pre() {
+    /usr/local/bin/kill_frecon 2>/dev/null || true
+    mkdir -p /run/lightdm /var/log/lightdm
+    chown root:lightdm /run/lightdm /var/log/lightdm 2>/dev/null || true
+    chmod 755 /run/lightdm /var/log/lightdm 2>/dev/null || true
+    command="$(get_lightdm_command)" || return 1
 }
 
 start() {
     ebegin "Starting LightDM"
-    mkdir -p /run/lightdm
-    chown root:lightdm /run/lightdm 2>/dev/null || true
-    chmod 755 /run/lightdm 2>/dev/null || true
-    /usr/sbin/lightdm &
-    eend 0
+    start_pre || return 1
+    start-stop-daemon --start --quiet --background --make-pidfile \
+        --pidfile "$pidfile" --exec "$command"
+    eend $?
 }
 
 stop() {
     ebegin "Stopping LightDM"
+    start-stop-daemon --stop --quiet --retry TERM/5/KILL/5 \
+        --pidfile "$pidfile" 2>/dev/null || true
     pkill -9 lightdm 2>/dev/null || true
-    pkill -9 lightdm-greeter 2>/dev/null || true
+    pkill -9 lightdm-gtk-greeter 2>/dev/null || true
     eend 0
 }
 XDMEOF
@@ -471,12 +505,17 @@ print_info "Configuring LightDM..."
 mkdir -p /etc/lightdm
 
 cat > /etc/lightdm/lightdm.conf << LDMEOF
+[LightDM]
+log-directory=/var/log/lightdm
+run-directory=/run/lightdm
+
 [Seat:*]
 autologin-user=${username:-user}
 user-session=xfce
-allow-user-switching=true
 greeter-session=lightdm-gtk-greeter
-xserver-command=X -Background
+allow-user-switching=true
+minimum-vt=7
+xserver-command=X -background none -nolisten tcp
 LDMEOF
 
 mkdir -p /etc/lightdm/lightdm-gtk-greeter.conf.d
