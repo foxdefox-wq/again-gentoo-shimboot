@@ -470,6 +470,11 @@ cat > /usr/local/bin/kill_frecon << 'KILLFRECONEOF'
 umount -l /dev/console 2>/dev/null || true
 pkill -9 frecon-lite 2>/dev/null || true
 pkill -9 frecon 2>/dev/null || true
+# Give LightDM/X the same effective input access that upstream Debian gets from
+# systemd-logind ACLs. This runs immediately before the display manager.
+mkdir -p /dev/input
+chgrp -R input /dev/input 2>/dev/null || true
+chmod a+rw /dev/input/event* /dev/input/mouse* /dev/input/mice /dev/input/js* 2>/dev/null || true
 # Keep /dev/console as the regular file left by the shimboot bootloader. This
 # matches upstream shimboot and avoids ChromeOS-kernel console/VT weirdness.
 sleep 1
@@ -486,11 +491,49 @@ exec dbus-run-session -- startxfce4
 STARTXFCEEOF
 chmod +x /usr/local/bin/shimboot-startxfce
 
-# Do not force Xorg input/video configuration. Upstream shimboot lets the distro's
-# display manager and Xorg auto-detect devices after ChromeOS drivers/firmware
-# are copied into the rootfs.
-mkdir -p /etc/X11/xorg.conf.d
-rm -f /etc/X11/xorg.conf.d/10-shimboot-serverflags.conf       /etc/X11/xorg.conf.d/20-shimboot.conf       /etc/X11/xorg.conf.d/40-libinput.conf       /etc/X11/xorg.conf.d/45-evdev-fallback.conf 2>/dev/null || true
+# Keep Xorg auto device discovery enabled and provide explicit input catchalls.
+# Gentoo's OpenRC setup does not always grant the same logind ACLs as upstream
+# Debian, so also install udev rules that make input devices readable.
+mkdir -p /etc/X11/xorg.conf.d /etc/udev/rules.d
+rm -f /etc/X11/xorg.conf.d/20-shimboot.conf 2>/dev/null || true
+cat > /etc/X11/xorg.conf.d/10-shimboot-serverflags.conf << 'SERVERFLAGSEOF'
+Section "ServerFlags"
+    Option "AutoAddDevices" "true"
+    Option "AutoEnableDevices" "true"
+EndSection
+SERVERFLAGSEOF
+cat > /etc/X11/xorg.conf.d/40-libinput.conf << 'LIBINPUTEOF'
+Section "InputClass"
+    Identifier "libinput keyboard catchall"
+    MatchIsKeyboard "on"
+    MatchDevicePath "/dev/input/event*"
+    Driver "libinput"
+EndSection
+Section "InputClass"
+    Identifier "libinput pointer catchall"
+    MatchIsPointer "on"
+    MatchDevicePath "/dev/input/event*"
+    Driver "libinput"
+EndSection
+Section "InputClass"
+    Identifier "libinput touchpad catchall"
+    MatchIsTouchpad "on"
+    MatchDevicePath "/dev/input/event*"
+    Driver "libinput"
+EndSection
+Section "InputClass"
+    Identifier "libinput touchscreen catchall"
+    MatchIsTouchscreen "on"
+    MatchDevicePath "/dev/input/event*"
+    Driver "libinput"
+EndSection
+LIBINPUTEOF
+cat > /etc/udev/rules.d/99-shimboot-input.rules << 'UDEVRULESEOF'
+KERNEL=="event*", SUBSYSTEM=="input", GROUP="input", MODE="0666"
+KERNEL=="mouse*", SUBSYSTEM=="input", GROUP="input", MODE="0666"
+KERNEL=="mice", SUBSYSTEM=="input", GROUP="input", MODE="0666"
+KERNEL=="js*", SUBSYSTEM=="input", GROUP="input", MODE="0666"
+UDEVRULESEOF
 
 cat > /usr/local/bin/shimboot-xinitrc << 'XINITRCEOF'
 #!/bin/sh
@@ -913,6 +956,10 @@ greeter-session=lightdm-gtk-greeter
 allow-user-switching=true
 xserver-command=X -background none -nolisten tcp
 LDMEOF
+
+# Ensure greeter/session users can read input nodes even if logind ACLs fail.
+groupadd -r input 2>/dev/null || true
+usermod -a -G input,video lightdm 2>/dev/null || true
 
 mkdir -p /etc/lightdm/lightdm-gtk-greeter.conf.d
 cat > /etc/lightdm/lightdm-gtk-greeter.conf.d/50-shimboot.conf << 'GREETEREOF'
