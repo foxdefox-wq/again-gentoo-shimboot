@@ -43,6 +43,37 @@ if [ ! -f /etc/passwd ]; then
   exit 1
 fi
 
+# Portage needs working proc/dev bind mounts when this script is rerun manually
+# with chroot. build_rootfs.sh creates these automatically, but a direct
+# `chroot rootfs /opt/setup_rootfs_gentoo.sh ...` will not.
+if [ ! -d /proc/self ] || [ ! -e /dev/null ]; then
+  print_error "The chroot is missing required /proc or /dev mounts."
+  print_error "Before rerunning this script manually, mount proc/sys/dev/run from the host:"
+  print_error "  for m in proc sys dev run; do sudo mount --make-rslave --rbind /$m ROOTFS/$m; done"
+  exit 1
+fi
+
+# Some tools use /dev/fd for bash process substitution. Make sure it exists
+# when /dev was copied without the usual symlinks.
+if [ ! -e /dev/fd ] && [ -d /proc/self/fd ]; then
+  ln -s /proc/self/fd /dev/fd 2>/dev/null || true
+fi
+if [ ! -e /dev/stdin ] && [ -e /proc/self/fd/0 ]; then
+  ln -s /proc/self/fd/0 /dev/stdin 2>/dev/null || true
+fi
+if [ ! -e /dev/stdout ] && [ -e /proc/self/fd/1 ]; then
+  ln -s /proc/self/fd/1 /dev/stdout 2>/dev/null || true
+fi
+if [ ! -e /dev/stderr ] && [ -e /proc/self/fd/2 ]; then
+  ln -s /proc/self/fd/2 /dev/stderr 2>/dev/null || true
+fi
+
+if [ ! -e /dev/fd/0 ]; then
+  print_error "The chroot has no working /dev/fd; Portage cannot run safely."
+  print_error "Exit the chroot and bind-mount /proc and /dev before rerunning setup."
+  exit 1
+fi
+
 # Set up environment
 export CONFIG_PROTECT="-*"
 export ACCEPT_LICENSE="*"
