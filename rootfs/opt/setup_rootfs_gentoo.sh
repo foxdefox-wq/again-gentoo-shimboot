@@ -430,7 +430,9 @@ exit 0
 KILLFRECONEOF
 chmod +x /usr/local/bin/kill_frecon
 
-# Kill frecon service
+# Kill frecon helper service. Do not add it to boot: killing frecon too early
+# blanks the only visible console before the display manager is ready. The xdm
+# service calls /usr/local/bin/kill_frecon immediately before starting LightDM.
 cat > /etc/init.d/kill-frecon << 'FRECONEOF'
 #!/sbin/openrc-run
 description="Release ChromeOS frecon console for Xorg"
@@ -439,12 +441,11 @@ command="/usr/local/bin/kill_frecon"
 depend() {
     need localmount
     after bootmisc modules
-    before xdm display-manager
+    before xdm
 }
 FRECONEOF
 chmod +x /etc/init.d/kill-frecon
 rm -f /etc/runlevels/*/kill-frecon 2>/dev/null || true
-rc-update add kill-frecon boot 2>/dev/null || true
 
 # XDM service for LightDM. Gentoo installs lightdm as /usr/bin/lightdm; keep a
 # /usr/sbin fallback for compatibility with other layouts.
@@ -468,7 +469,6 @@ depend() {
     need localmount dbus
     after bootmisc modules kill-frecon elogind
     use elogind
-    provide display-manager
 }
 
 start_pre() {
@@ -497,12 +497,22 @@ stop() {
 }
 XDMEOF
 chmod +x /etc/init.d/xdm
-rm -f /etc/runlevels/*/xdm 2>/dev/null || true
+# Avoid Gentoo display-manager-init conflicts; this image uses the xdm service
+# above to start LightDM directly.
+for level in boot default nonetwork; do
+  rc-update del display-manager "$level" 2>/dev/null || true
+done
+rm -f /etc/runlevels/*/display-manager /etc/runlevels/*/xdm 2>/dev/null || true
 rc-update add xdm default 2>/dev/null || true
 
 # Configure LightDM
 print_info "Configuring LightDM..."
-mkdir -p /etc/lightdm
+mkdir -p /etc/lightdm /etc/conf.d
+
+# These are for compatibility with Gentoo's display-manager-init/xdm tooling if
+# present, although shimboot starts LightDM through /etc/init.d/xdm directly.
+echo 'DISPLAYMANAGER="lightdm"' > /etc/conf.d/xdm
+echo 'DISPLAYMANAGER="lightdm"' > /etc/conf.d/display-manager
 
 cat > /etc/lightdm/lightdm.conf << LDMEOF
 [LightDM]

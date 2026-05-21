@@ -19,7 +19,6 @@ depend() {
     need localmount dbus
     after bootmisc modules kill-frecon elogind
     use elogind
-    provide display-manager
 }
 
 start_pre() {
