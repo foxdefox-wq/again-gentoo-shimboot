@@ -199,6 +199,8 @@ xfce-base/thunar udisks
 gnome-base/gvfs udisks udev
 # NetworkManager[wifi] requires wpa_supplicant[dbus]
 net-wireless/wpa_supplicant dbus
+# gvfs/libsecret/gnome-keyring chain requires legacy gcr[gtk]
+app-crypt/gcr gtk
 USEEOF
 
 # Helper that installs packages through the binhost-aware Portage config.
