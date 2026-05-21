@@ -1,0 +1,47 @@
+#!/sbin/openrc-run
+
+description="Start an XFCE session if LightDM does not create one"
+command=/bin/true
+
+_user="${SHIMBOOT_XFCE_USER:-user}"
+_log="/var/log/shimboot-xfce-fallback.log"
+
+depend() {
+    need localmount dbus
+    after display-manager xdm elogind
+    use elogind
+}
+
+start() {
+    ebegin "Scheduling XFCE fallback"
+    (
+        sleep 20
+
+        if pgrep -u "$_user" -x xfce4-session >/dev/null 2>&1; then
+            exit 0
+        fi
+
+        echo "$(date): LightDM did not start XFCE; launching fallback" >> "$_log"
+        /usr/local/bin/kill_frecon >> "$_log" 2>&1 || true
+
+        pkill -9 lightdm >> "$_log" 2>&1 || true
+        pkill -9 lightdm-gtk-greeter >> "$_log" 2>&1 || true
+        pkill -9 Xorg >> "$_log" 2>&1 || true
+        pkill -9 X >> "$_log" 2>&1 || true
+        sleep 2
+
+        uid="$(id -u "$_user" 2>/dev/null || true)"
+        gid="$(id -g "$_user" 2>/dev/null || true)"
+        if [ -z "$uid" ] || [ -z "$gid" ]; then
+            echo "$(date): user $_user not found" >> "$_log"
+            exit 0
+        fi
+
+        mkdir -p "/run/user/$uid"
+        chown "$uid:$gid" "/run/user/$uid"
+        chmod 700 "/run/user/$uid"
+
+        su - "$_user" -c "XDG_RUNTIME_DIR=/run/user/$uid exec startx /usr/local/bin/shimboot-startxfce -- :0 vt7 -nolisten tcp" >> "$_log" 2>&1 &
+    ) &
+    eend 0
+}

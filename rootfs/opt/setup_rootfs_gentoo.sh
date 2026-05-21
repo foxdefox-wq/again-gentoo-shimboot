@@ -253,6 +253,9 @@ essential_packages=(
   sys-fs/udisks
   sys-block/zram-init
   app-shells/bash-completion
+  gui-libs/display-manager-init
+  x11-apps/xinit
+  x11-apps/xauth
 )
 
 graphics_packages=(
@@ -430,9 +433,26 @@ exit 0
 KILLFRECONEOF
 chmod +x /usr/local/bin/kill_frecon
 
-# Kill frecon helper service. Do not add it to boot: killing frecon too early
-# blanks the only visible console before the display manager is ready. The xdm
-# service calls /usr/local/bin/kill_frecon immediately before starting LightDM.
+cat > /usr/local/bin/shimboot-startxfce << 'STARTXFCEEOF'
+#!/bin/sh
+export XDG_SESSION_TYPE=x11
+export DESKTOP_SESSION=xfce
+export XDG_CURRENT_DESKTOP=XFCE
+exec dbus-run-session -- startxfce4
+STARTXFCEEOF
+chmod +x /usr/local/bin/shimboot-startxfce
+
+# Let the fallback start Xorg as the user even when no physical Linux console
+# login happened first.
+mkdir -p /etc/X11
+cat > /etc/X11/Xwrapper.config << 'XWRAPPEREOF'
+allowed_users=anybody
+needs_root_rights=yes
+XWRAPPEREOF
+
+# Kill frecon helper service. It runs in the default runlevel immediately before
+# the display manager, not in boot, so the visible console is released only when
+# X/LightDM is about to start.
 cat > /etc/init.d/kill-frecon << 'FRECONEOF'
 #!/sbin/openrc-run
 description="Release ChromeOS frecon console for Xorg"
@@ -441,7 +461,7 @@ command="/usr/local/bin/kill_frecon"
 depend() {
     need localmount
     after bootmisc modules
-    before xdm
+    before display-manager xdm
 }
 FRECONEOF
 chmod +x /etc/init.d/kill-frecon
@@ -497,13 +517,72 @@ stop() {
 }
 XDMEOF
 chmod +x /etc/init.d/xdm
-# Avoid Gentoo display-manager-init conflicts; this image uses the xdm service
-# above to start LightDM directly.
-for level in boot default nonetwork; do
-  rc-update del display-manager "$level" 2>/dev/null || true
-done
-rm -f /etc/runlevels/*/display-manager /etc/runlevels/*/xdm 2>/dev/null || true
-rc-update add xdm default 2>/dev/null || true
+
+# Prefer Gentoo's real display-manager service when available. It starts LightDM
+# using Gentoo's supported /etc/conf.d/display-manager path. Keep xdm only as a
+# fallback for older snapshots without display-manager-init.
+rm -f /etc/runlevels/*/display-manager /etc/runlevels/*/xdm /etc/runlevels/*/kill-frecon 2>/dev/null || true
+if [ -x /etc/init.d/display-manager ]; then
+  rc-update add kill-frecon default 2>/dev/null || true
+  rc-update add display-manager default 2>/dev/null || true
+else
+  rc-update add xdm default 2>/dev/null || true
+fi
+
+# If LightDM/X fails to produce an XFCE session, start one directly after a short
+# delay. This prevents a permanent blank screen while still trying LightDM first.
+cat > /etc/init.d/shimboot-xfce-fallback << 'XFCEFALLBACKEOF'
+#!/sbin/openrc-run
+
+description="Start an XFCE session if LightDM does not create one"
+command=/bin/true
+
+_user="${SHIMBOOT_XFCE_USER:-user}"
+_log="/var/log/shimboot-xfce-fallback.log"
+
+depend() {
+    need localmount dbus
+    after display-manager xdm elogind
+    use elogind
+}
+
+start() {
+    ebegin "Scheduling XFCE fallback"
+    (
+        sleep 20
+
+        if pgrep -u "$_user" -x xfce4-session >/dev/null 2>&1; then
+            exit 0
+        fi
+
+        echo "$(date): LightDM did not start XFCE; launching fallback" >> "$_log"
+        /usr/local/bin/kill_frecon >> "$_log" 2>&1 || true
+
+        pkill -9 lightdm >> "$_log" 2>&1 || true
+        pkill -9 lightdm-gtk-greeter >> "$_log" 2>&1 || true
+        pkill -9 Xorg >> "$_log" 2>&1 || true
+        pkill -9 X >> "$_log" 2>&1 || true
+        sleep 2
+
+        uid="$(id -u "$_user" 2>/dev/null || true)"
+        gid="$(id -g "$_user" 2>/dev/null || true)"
+        if [ -z "$uid" ] || [ -z "$gid" ]; then
+            echo "$(date): user $_user not found" >> "$_log"
+            exit 0
+        fi
+
+        mkdir -p "/run/user/$uid"
+        chown "$uid:$gid" "/run/user/$uid"
+        chmod 700 "/run/user/$uid"
+
+        su - "$_user" -c "XDG_RUNTIME_DIR=/run/user/$uid exec startx /usr/local/bin/shimboot-startxfce -- :0 vt7 -nolisten tcp" >> "$_log" 2>&1 &
+    ) &
+    eend 0
+}
+XFCEFALLBACKEOF
+chmod +x /etc/init.d/shimboot-xfce-fallback
+rm -f /etc/runlevels/*/shimboot-xfce-fallback 2>/dev/null || true
+rc-update add shimboot-xfce-fallback default 2>/dev/null || true
 
 # Configure LightDM
 print_info "Configuring LightDM..."
@@ -521,11 +600,11 @@ run-directory=/run/lightdm
 
 [Seat:*]
 autologin-user=${username:-user}
+autologin-user-timeout=0
+autologin-session=xfce
 user-session=xfce
 greeter-session=lightdm-gtk-greeter
 allow-user-switching=true
-minimum-vt=7
-xserver-command=X -background none -nolisten tcp
 LDMEOF
 
 mkdir -p /etc/lightdm/lightdm-gtk-greeter.conf.d
@@ -549,7 +628,9 @@ if [ ! "$username" ]; then
 fi
 
 print_info "Creating user: $username"
-useradd -m -G wheel,audio,video,usb,input,portage,plugdev -s /bin/bash "$username" 2>/dev/null || true
+groupadd -r autologin 2>/dev/null || true
+useradd -m -G wheel,audio,video,usb,input,portage,plugdev,autologin -s /bin/bash "$username" 2>/dev/null || true
+usermod -a -G wheel,audio,video,usb,input,portage,plugdev,autologin "$username" 2>/dev/null || true
 
 # Configure sudo idempotently
 if ! grep -q '^%wheel ALL=(ALL:ALL) ALL' /etc/sudoers 2>/dev/null; then

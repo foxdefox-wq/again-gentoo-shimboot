@@ -1,7 +1,7 @@
 #!/sbin/openrc-run
 # OpenRC helper for manually releasing ChromeOS frecon.
-# Do not add this service to boot; xdm runs /usr/local/bin/kill_frecon right
-# before LightDM starts so the screen is blank for the shortest possible time.
+# Do not add this service to boot; run it in default immediately before the
+# display manager so the screen is blank for the shortest possible time.
 
 description="Release ChromeOS frecon console for Xorg"
 command="/usr/local/bin/kill_frecon"
@@ -10,5 +10,5 @@ command_args=""
 depend() {
     need localmount
     after bootmisc modules
-    before xdm
+    before display-manager xdm
 }
