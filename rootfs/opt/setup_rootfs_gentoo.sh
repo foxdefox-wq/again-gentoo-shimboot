@@ -380,12 +380,13 @@ chmod +x /etc/init.d/udev-trigger
 # Configure OpenRC services
 print_info "Configuring OpenRC services..."
 
-# Core OpenRC boot services. Add only if the service exists so this remains
-# compatible across Gentoo stage3 snapshots.
-# Match Alpine shimboot's OpenRC hardware path: devfs + mdev + hwdrivers +
-# modules. Gentoo udev is kept too because desktop packages expect it, but mdev
-# creates /dev nodes early like Alpine.
-for svc in devfs sysfs procfs dmesg mdev hwdrivers udev udev-trigger; do
+# Core OpenRC boot services. Keep this close to upstream Alpine shimboot:
+# devfs/sysfs/procfs + udev/udev-trigger + hwdrivers/modules. Do not run custom
+# hardware module services in the boot path.
+for svc in devfs sysfs procfs dmesg udev udev-trigger; do
+  [ -x "/etc/init.d/$svc" ] && rc-update add "$svc" sysinit 2>/dev/null || true
+done
+for svc in hwdrivers; do
   [ -x "/etc/init.d/$svc" ] && rc-update add "$svc" sysinit 2>/dev/null || true
 done
 for svc in modules hwclock sysctl hostname bootmisc localmount swap; do
@@ -395,9 +396,17 @@ for svc in mount-ro killprocs savecache; do
   [ -x "/etc/init.d/$svc" ] && rc-update add "$svc" shutdown 2>/dev/null || true
 done
 
+# Disable experimental custom module loaders; the shim kernel modules are loaded
+# through normal OpenRC modules/udev, like Alpine and Debian/systemd do.
+for level in sysinit boot default nonetwork; do
+  rc-update del mdev "$level" 2>/dev/null || true
+  rc-update del shimboot-mdev "$level" 2>/dev/null || true
+  rc-update del shimboot-hwmods "$level" 2>/dev/null || true
+done
+rm -f /etc/runlevels/*/mdev /etc/runlevels/*/shimboot-mdev /etc/runlevels/*/shimboot-hwmods 2>/dev/null || true
+
 # The Gentoo stage3 may include OpenRC's local service in the default runlevel.
-# On shimboot it can hang at "Starting local" before tty autologin ever starts,
-# and we do not use /etc/local.d for anything. Disable it explicitly.
+# We do not use /etc/local.d for this image.
 for level in boot default nonetwork; do
   rc-update del local "$level" 2>/dev/null || true
 done
@@ -958,15 +967,15 @@ chmod +x /etc/init.d/shimboot-xfce
 # installed for manual debugging, but shimboot-xfce is the default graphical path.
 rm -f /etc/runlevels/*/display-manager /etc/runlevels/*/xdm /etc/runlevels/*/kill-frecon /etc/runlevels/*/shimboot-xfce-fallback /etc/runlevels/*/shimboot-xfce 2>/dev/null || true
 rc-update add devfs sysinit 2>/dev/null || true
-rc-update add mdev sysinit 2>/dev/null || true
 [ -x /etc/init.d/hwdrivers ] && rc-update add hwdrivers sysinit 2>/dev/null || true
-rc-update del shimboot-hwmods default 2>/dev/null || true
-rm -f /etc/runlevels/*/shimboot-hwmods 2>/dev/null || true
-rc-update add shimboot-xfce default 2>/dev/null || true
-for level in boot default nonetwork; do
+for level in sysinit boot default nonetwork; do
+  rc-update del mdev "$level" 2>/dev/null || true
+  rc-update del shimboot-mdev "$level" 2>/dev/null || true
+  rc-update del shimboot-hwmods "$level" 2>/dev/null || true
   rc-update del local "$level" 2>/dev/null || true
 done
-rm -f /etc/runlevels/*/local 2>/dev/null || true
+rm -f /etc/runlevels/*/mdev /etc/runlevels/*/shimboot-mdev /etc/runlevels/*/shimboot-hwmods /etc/runlevels/*/local 2>/dev/null || true
+rc-update add shimboot-xfce default 2>/dev/null || true
 
 # Configure LightDM
 print_info "Configuring LightDM..."

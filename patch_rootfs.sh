@@ -18,94 +18,42 @@ copy_modules() {
   local reco_rootfs=$(realpath -m $2)
   local target_rootfs=$(realpath -m $3)
 
+  # Match upstream shimboot: the running kernel is copied from the shim, so use
+  # the shim module tree. Recovery modules may be for a different kernel build.
   rm -rf "${target_rootfs}/lib/modules"
-  mkdir -p "${target_rootfs}/lib/modules"
-
-  # Merge modules from both recovery and shim images. The recovery image often
-  # has the complete ChromeOS hardware driver set, while the shim can be more
-  # minimal. Input devices on Chromebooks (cros_ec keyboard, I2C-HID touchpads,
-  # touchscreens) may live only in the recovery module tree.
-  if [ -d "${reco_rootfs}/lib/modules" ]; then
-    cp -a "${reco_rootfs}/lib/modules/." "${target_rootfs}/lib/modules/" 2>/dev/null || true
-  fi
-  if [ -d "${shim_rootfs}/lib/modules" ]; then
-    cp -a "${shim_rootfs}/lib/modules/." "${target_rootfs}/lib/modules/" 2>/dev/null || true
-  fi
+  cp -r "${shim_rootfs}/lib/modules" "${target_rootfs}/lib/modules"
 
   mkdir -p "${target_rootfs}/lib/firmware"
-  cp -a --remove-destination "${shim_rootfs}/lib/firmware/." "${target_rootfs}/lib/firmware/" 2>/dev/null || true
-  cp -a --remove-destination "${reco_rootfs}/lib/firmware/." "${target_rootfs}/lib/firmware/" 2>/dev/null || true
-
-  # ChromeOS touch firmware commonly lives under /opt/google and /lib/firmware
-  # contains symlinks to it. Preserve those targets too.
-  mkdir -p "${target_rootfs}/opt"
-  if [ -d "${shim_rootfs}/opt/google" ]; then
-    mkdir -p "${target_rootfs}/opt/google"
-    cp -a "${shim_rootfs}/opt/google/." "${target_rootfs}/opt/google/" 2>/dev/null || true
-  fi
-  if [ -d "${reco_rootfs}/opt/google" ]; then
-    mkdir -p "${target_rootfs}/opt/google"
-    cp -a "${reco_rootfs}/opt/google/." "${target_rootfs}/opt/google/" 2>/dev/null || true
-  fi
+  cp -r --remove-destination "${shim_rootfs}/lib/firmware/"* "${target_rootfs}/lib/firmware/" 2>/dev/null || true
+  cp -r --remove-destination "${reco_rootfs}/lib/firmware/"* "${target_rootfs}/lib/firmware/" 2>/dev/null || true
 
   mkdir -p "${target_rootfs}/lib/modprobe.d/"
   mkdir -p "${target_rootfs}/etc/modprobe.d/"
   cp -r "${reco_rootfs}/lib/modprobe.d/"* "${target_rootfs}/lib/modprobe.d/" 2>/dev/null || true
   cp -r "${reco_rootfs}/etc/modprobe.d/"* "${target_rootfs}/etc/modprobe.d/" 2>/dev/null || true
 
-  # Preserve ChromeOS module-load hints. Alpine shimboot copies these into
-  # /etc/modules for OpenRC's modules service, so do the same for Gentoo.
+  # Copy ChromeOS module-load hints, then use the same OpenRC approach as Alpine:
+  # /etc/modules is what the modules service reads.
   mkdir -p "${target_rootfs}/etc/modules-load.d/"
   cp -r "${shim_rootfs}/etc/modules-load.d/"* "${target_rootfs}/etc/modules-load.d/" 2>/dev/null || true
   cp -r "${reco_rootfs}/etc/modules-load.d/"* "${target_rootfs}/etc/modules-load.d/" 2>/dev/null || true
-  rm -f "${target_rootfs}/etc/modules-load.d/shimboot-hardware.conf" 2>/dev/null || true
   : > "${target_rootfs}/etc/modules"
   for mod_file in "${target_rootfs}"/etc/modules-load.d/*.conf; do
     [ -f "$mod_file" ] || continue
     sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' "$mod_file" >> "${target_rootfs}/etc/modules"
     echo >> "${target_rootfs}/etc/modules"
   done
-  #decompress kernel modules if necessary - debian won't recognize these otherwise
+
+  # Decompress and regenerate module dependency metadata.
   local compressed_files="$(find "${target_rootfs}/lib/modules" -name '*.gz')"
   if [ "$compressed_files" ]; then
     echo "$compressed_files" | xargs gunzip
   fi
-
-  # Always regenerate module dependency metadata after merging ChromeOS modules.
   for kernel_dir in "$target_rootfs/lib/modules/"*; do
     [ -d "$kernel_dir" ] || continue
     local version="$(basename "$kernel_dir")"
     depmod -b "$target_rootfs" "$version" || true
   done
-}
-
-prune_firmware() {
-  local firmware_dir="$1"
-  [ -d "$firmware_dir" ] || return 0
-
-  # Keep Chromebook essentials: Intel/Realtek/Broadcom/Qualcomm/MediaTek WiFi,
-  # CPU/GPU microcode, regulatory DB, and ChromeOS touch firmware links. Delete
-  # unrelated firmware families so Gentoo images do not balloon to many GB.
-  find "$firmware_dir" -type f \
-    ! -path "*/intel/*" \
-    ! -path "*/iwlwifi/*" \
-    ! -path "*/rtw88/*" \
-    ! -path "*/rtw89/*" \
-    ! -path "*/rtl_bt/*" \
-    ! -path "*/brcm/*" \
-    ! -path "*/ath10k/*" \
-    ! -path "*/ath11k/*" \
-    ! -path "*/mediatek/*" \
-    ! -path "*/qca/*" \
-    ! -path "*/amdgpu/*" \
-    ! -name "regulatory.db*" \
-    ! -name "*.ucode" \
-    ! -iname "*elan*" \
-    ! -iname "*atmel*" \
-    ! -iname "*mxt*" \
-    ! -iname "*touch*" \
-    -delete 2>/dev/null || true
-  find "$firmware_dir" -type d -empty -delete 2>/dev/null || true
 }
 
 copy_firmware() {
