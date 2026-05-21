@@ -163,8 +163,9 @@ media-libs/mesa X
 media-libs/freetype harfbuzz png
 # xfce4-pulseaudio-plugin pulls xfce4-panel[dbusmenu], which needs libdbusmenu[gtk3]
 dev-libs/libdbusmenu gtk3
-# thunar-volman requires thunar[udisks]
+# thunar-volman requires thunar[udisks], which pulls gvfs[udisks,udev]
 xfce-base/thunar udisks
+gnome-base/gvfs udisks udev
 USEEOF
 
 # Helper that installs packages through the binhost-aware Portage config.
