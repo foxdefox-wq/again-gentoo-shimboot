@@ -3,10 +3,13 @@
 #utilties for reading shim disk images
 
 run_binwalk() {
+  # Some binwalk builds try optional YAFFS extractors against ChromeOS kernels and
+  # spam scary, non-fatal yaffshiv warnings when that helper is not installed.
+  # Filter only those known-noisy lines; real binwalk errors still pass through.
   if binwalk -h | grep -- '--run-as' >/dev/null; then
-    binwalk "$@" --run-as=root
+    binwalk "$@" --run-as=root 2> >(grep -vE "yaffshiv|One or more files failed to extract" >&2 || true)
   else
-    binwalk "$@"
+    binwalk "$@" 2> >(grep -vE "yaffshiv|One or more files failed to extract" >&2 || true)
   fi
 }
 

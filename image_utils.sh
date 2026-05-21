@@ -96,9 +96,9 @@ create_partitions() {
   if [ "$is_luks" ]; then
     echo "$crypt_password" | cryptsetup luksFormat "${image_loop}p4"
     echo "$crypt_password" | cryptsetup luksOpen "${image_loop}p4" rootfs
-    mkfs.ext4 /dev/mapper/rootfs
+    mkfs.ext4 -i 4096 /dev/mapper/rootfs
   else 
-    mkfs.ext4 "${image_loop}p4"
+    mkfs.ext4 -i 4096 "${image_loop}p4"
   fi
 }
 
@@ -195,6 +195,11 @@ copy_rootfs() {
     --exclude='./sys/*'
     --exclude='./dev/*'
     --exclude='./run/*'
+    --exclude='./var/cache/binhost/*'
+    --exclude='./var/cache/binpkgs/*'
+    --exclude='./var/cache/distfiles/*'
+    --exclude='./var/tmp/portage/*'
+    --exclude='./var/db/repos/gentoo/*'
   )
 
   if [ "$quiet" ]; then

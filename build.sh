@@ -82,9 +82,11 @@ print_info "creating disk image"
 # /proc/kcore). Unmount them before sizing/copying the rootfs.
 unmount_rootfs_pseudo_mounts
 rootfs_size="$(du -smx "$rootfs_dir" | cut -f 1)"
-rootfs_part_size="$(($rootfs_size * 12 / 10 + 5))"
+rootfs_part_size="$(($rootfs_size * 15 / 10 + 512))"
 #create a 20mb bootloader partition
-#rootfs partition is 20% larger than its contents
+#rootfs partition is 50% larger than its contents, plus 512MiB slack for
+#filesystem metadata/inodes. Gentoo has lots of small files, and the old 20%
+#slack could run out of space/inodes while tar was copying the rootfs.
 create_image "$output_path" 20 "$rootfs_part_size" "$bootloader_part_name"
 
 print_info "creating loop device for the image"
