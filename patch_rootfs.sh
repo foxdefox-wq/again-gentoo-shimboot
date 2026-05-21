@@ -65,6 +65,11 @@ copy_modules() {
     sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' "$mod_file" >> "${target_rootfs}/etc/modules"
     echo >> "${target_rootfs}/etc/modules"
   done
+  mkdir -p "${target_rootfs}/etc/conf.d"
+  cat > "${target_rootfs}/etc/conf.d/modules" << 'CONFDMODULESEOF'
+modules="cros_ec_keyb i2c_hid i2c_hid_acpi elan_i2c hid_multitouch atmel_mxt_ts elants_i2c raydium_i2c_ts"
+CONFDMODULESEOF
+
   #decompress kernel modules if necessary - debian won't recognize these otherwise
   local compressed_files="$(find "${target_rootfs}/lib/modules" -name '*.gz')"
   if [ "$compressed_files" ]; then

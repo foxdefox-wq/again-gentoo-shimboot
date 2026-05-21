@@ -382,12 +382,10 @@ print_info "Configuring OpenRC services..."
 
 # Core OpenRC boot services. Add only if the service exists so this remains
 # compatible across Gentoo stage3 snapshots.
-# Match upstream shimboot's systemd/devtmpfs behavior with OpenRC equivalents:
-# devfs creates /dev nodes, then udev/udev-trigger applies properties/permissions.
-for svc in mdev shimboot-mdev; do
-  rc-update del "$svc" sysinit 2>/dev/null || true
-done
-for svc in devfs sysfs procfs dmesg udev udev-trigger; do
+# Match Alpine shimboot's OpenRC hardware path: devfs + mdev + hwdrivers +
+# modules. Gentoo udev is kept too because desktop packages expect it, but mdev
+# creates /dev nodes early like Alpine.
+for svc in devfs sysfs procfs dmesg mdev hwdrivers udev udev-trigger; do
   [ -x "/etc/init.d/$svc" ] && rc-update add "$svc" sysinit 2>/dev/null || true
 done
 for svc in modules hwclock sysctl hostname bootmisc localmount swap; do
@@ -547,9 +545,9 @@ chmod +x /usr/local/bin/shimboot-xinitrc
 cat > /usr/local/bin/shimboot-mdev-scan << 'MDEVSCANEOF'
 #!/bin/sh
 
-# Alpine-style device population for shimboot.
-# Upstream Alpine shimboot uses OpenRC+mdev, and mdev is more tolerant of the
-# ChromeOS shim kernel than udev/systemd-tmpfiles on some devices.
+# Alpine-style device population for shimboot Gentoo.
+# Alpine shimboot uses OpenRC devfs + mdev + hwdrivers + modules.  This helper
+# provides the same mdev scan path while still allowing Gentoo's udev to run.
 
 log=/run/shimboot-mdev.log
 mkdir -p /run /dev
@@ -568,6 +566,16 @@ if [ -z "$bb" ]; then
     exit 0
 fi
 
+# Minimal mdev.conf giving X/libinput access to input nodes even without logind
+# ACLs. mdev accepts missing/nonmatching rules harmlessly.
+cat > /etc/mdev.conf <<'MDEVCONF'
+input/event[0-9]* 0:0 0666
+input/mouse[0-9]* 0:0 0666
+input/mice 0:0 0666
+input/js[0-9]* 0:0 0666
+dri/.* 0:0 0666
+MDEVCONF
+
 # Match Alpine's mdev behavior: let mdev service future hotplug events, then
 # scan current sysfs devices. Keep this best-effort so boot never blocks.
 if [ -w /proc/sys/kernel/hotplug ]; then
@@ -583,6 +591,7 @@ mkdir -p /dev/input /dev/dri /dev/snd /dev/pts /dev/shm
 [ -e /dev/stdout ] || ln -s /proc/self/fd/1 /dev/stdout 2>/dev/null || true
 [ -e /dev/stderr ] || ln -s /proc/self/fd/2 /dev/stderr 2>/dev/null || true
 
+chmod a+rw /dev/input/event* /dev/input/mouse* /dev/input/mice /dev/input/js* /dev/dri/* 2>>"$log" || true
 ls -la /dev/input >>"$log" 2>&1 || true
 exit 0
 MDEVSCANEOF
@@ -606,19 +615,18 @@ cat > /etc/init.d/mdev << 'MDEVCOMPATEOF'
 #!/sbin/openrc-run
 
 # Alpine-compatible mdev service for shimboot Gentoo.
-# This intentionally mirrors Alpine shimboot's device manager path more closely
-# than pure Gentoo udev, while still allowing udev to run afterwards.
 
 description="Populate /dev with busybox mdev"
 command="/usr/local/bin/shimboot-mdev-scan"
 
 depend() {
     need devfs sysfs
-    before udev udev-trigger modules shimboot-hwmods shimboot-xfce
+    before udev udev-trigger hwdrivers modules shimboot-hwmods shimboot-xfce
 }
 MDEVCOMPATEOF
 chmod +x /etc/init.d/mdev
 rm -f /etc/runlevels/*/mdev 2>/dev/null || true
+rc-update add mdev sysinit 2>/dev/null || true
 
 cat > /usr/local/bin/shimboot-load-hwmods << 'HWMODSEOF'
 #!/bin/sh
@@ -747,8 +755,8 @@ description="Load Chromebook hardware/input modules for shimboot"
 command="/usr/local/bin/shimboot-load-hwmods"
 
 depend() {
-    need sysfs
-    after udev-trigger modules
+    need sysfs mdev
+    after mdev hwdrivers modules udev-trigger
     before display-manager xdm shimboot-xfce
 }
 HWMODSSERVICEEOF
@@ -897,8 +905,8 @@ chmod +x /etc/init.d/shimboot-xfce
 # installed for manual debugging, but shimboot-xfce is the default graphical path.
 rm -f /etc/runlevels/*/display-manager /etc/runlevels/*/xdm /etc/runlevels/*/kill-frecon /etc/runlevels/*/shimboot-xfce-fallback /etc/runlevels/*/shimboot-xfce 2>/dev/null || true
 rc-update add devfs sysinit 2>/dev/null || true
-rc-update del mdev sysinit 2>/dev/null || true
-rc-update del shimboot-mdev sysinit 2>/dev/null || true
+rc-update add mdev sysinit 2>/dev/null || true
+[ -x /etc/init.d/hwdrivers ] && rc-update add hwdrivers sysinit 2>/dev/null || true
 rc-update add shimboot-hwmods default 2>/dev/null || true
 rc-update add shimboot-xfce default 2>/dev/null || true
 
@@ -1008,6 +1016,13 @@ if [ -d /etc/modules-load.d ]; then
     echo >> /etc/modules
   done
 fi
+
+# Explicit OpenRC module config for ChromeOS input. This mirrors the manual
+# Gentoo/OpenRC fix and is intentionally small to avoid large boot spam.
+mkdir -p /etc/conf.d
+cat > /etc/conf.d/modules << 'CONFDMODULESEOF'
+modules="cros_ec_keyb i2c_hid i2c_hid_acpi elan_i2c hid_multitouch atmel_mxt_ts elants_i2c raydium_i2c_ts"
+CONFDMODULESEOF
 
 # Clean up. Avoid depclean in strict binpkg mode: if a dependency has no current
 # binpkg, a cleanup pass can turn a successful binary install into a source-build

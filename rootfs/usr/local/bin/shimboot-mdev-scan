@@ -1,8 +1,8 @@
 #!/bin/sh
 
-# Alpine-style device population for shimboot.
-# Upstream Alpine shimboot uses OpenRC+mdev, and mdev is more tolerant of the
-# ChromeOS shim kernel than udev/systemd-tmpfiles on some devices.
+# Alpine-style device population for shimboot Gentoo.
+# Alpine shimboot uses OpenRC devfs + mdev + hwdrivers + modules.  This helper
+# provides the same mdev scan path while still allowing Gentoo's udev to run.
 
 log=/run/shimboot-mdev.log
 mkdir -p /run /dev
@@ -21,6 +21,16 @@ if [ -z "$bb" ]; then
     exit 0
 fi
 
+# Minimal mdev.conf giving X/libinput access to input nodes even without logind
+# ACLs. mdev accepts missing/nonmatching rules harmlessly.
+cat > /etc/mdev.conf <<'MDEVCONF'
+input/event[0-9]* 0:0 0666
+input/mouse[0-9]* 0:0 0666
+input/mice 0:0 0666
+input/js[0-9]* 0:0 0666
+dri/.* 0:0 0666
+MDEVCONF
+
 # Match Alpine's mdev behavior: let mdev service future hotplug events, then
 # scan current sysfs devices. Keep this best-effort so boot never blocks.
 if [ -w /proc/sys/kernel/hotplug ]; then
@@ -36,5 +46,6 @@ mkdir -p /dev/input /dev/dri /dev/snd /dev/pts /dev/shm
 [ -e /dev/stdout ] || ln -s /proc/self/fd/1 /dev/stdout 2>/dev/null || true
 [ -e /dev/stderr ] || ln -s /proc/self/fd/2 /dev/stderr 2>/dev/null || true
 
+chmod a+rw /dev/input/event* /dev/input/mouse* /dev/input/mice /dev/input/js* /dev/dri/* 2>>"$log" || true
 ls -la /dev/input >>"$log" 2>&1 || true
 exit 0
