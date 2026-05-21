@@ -16,7 +16,7 @@ print_help() {
 }
 
 assert_root
-assert_deps "cpio binwalk pcre2-utils realpath cgpt mkfs.ext4 mkfs.ext2 fdisk lz4"
+assert_deps "cpio binwalk pcre2grep realpath cgpt mkfs.ext4 mkfs.ext2 fdisk lz4 findmnt"
 assert_args "$3"
 parse_args "$@"
 
@@ -58,8 +58,30 @@ extract_initramfs_full "$shim_path" "$initramfs_dir" "$kernel_img" "$arch"
 print_info "patching initramfs"
 patch_initramfs "$initramfs_dir"
 
+unmount_rootfs_pseudo_mounts() {
+  local mountpoint target mounted_targets
+  for mountpoint in proc sys dev run; do
+    target="$rootfs_dir/$mountpoint"
+    if [ ! -d "$target" ]; then
+      continue
+    fi
+
+    mounted_targets="$(findmnt -Rrn -o TARGET "$target" 2>/dev/null | sort -r || true)"
+    if [ "$mounted_targets" ]; then
+      print_info "unmounting stale $mountpoint mounts from rootfs"
+      while IFS= read -r mounted_target; do
+        [ "$mounted_target" ] && umount -l "$mounted_target" 2>/dev/null || true
+      done <<< "$mounted_targets"
+    fi
+  done
+}
+
 print_info "creating disk image"
-rootfs_size="$(du -sm $rootfs_dir | cut -f 1)"
+# If a previous interrupted/manual chroot left proc/sys/dev/run bind-mounted in
+# the rootfs, du/tar will try to traverse the host pseudo filesystems (including
+# /proc/kcore). Unmount them before sizing/copying the rootfs.
+unmount_rootfs_pseudo_mounts
+rootfs_size="$(du -smx "$rootfs_dir" | cut -f 1)"
 rootfs_part_size="$(($rootfs_size * 12 / 10 + 5))"
 #create a 20mb bootloader partition
 #rootfs partition is 20% larger than its contents

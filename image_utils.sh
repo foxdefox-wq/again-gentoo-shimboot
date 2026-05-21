@@ -138,11 +138,7 @@ populate_partitions() {
     safe_mount "${image_loop}p4" $rootfs_mount
   fi
 
-  if [ "$quiet" ]; then
-    cp -ar $rootfs_dir/* $rootfs_mount
-  else
-    copy_progress $rootfs_dir $rootfs_mount
-  fi
+  copy_rootfs "$rootfs_dir" "$rootfs_mount" "$quiet"
   umount $rootfs_mount
   if [ "$luks_enabled" ]; then
     cryptsetup close rootfs
@@ -182,10 +178,36 @@ clean_loops() {
   done
 }
 
+copy_rootfs() {
+  local source="$1"
+  local destination="$2"
+  local quiet="$3"
+  local total_bytes="$(du -sbx "$source" | cut -f1)"
+
+  mkdir -p "$destination"
+
+  # Never copy live chroot bind mounts/pseudo filesystems into the final image.
+  # The directories themselves are kept, but their contents are recreated by the
+  # kernel/init at boot. This also prevents tar from reading /proc/kcore.
+  local tar_excludes=(
+    --one-file-system
+    --exclude='./proc/*'
+    --exclude='./sys/*'
+    --exclude='./dev/*'
+    --exclude='./run/*'
+  )
+
+  if [ "$quiet" ]; then
+    tar -cf - "${tar_excludes[@]}" -C "${source}" . | tar -xf - -C "${destination}"
+  else
+    tar -cf - "${tar_excludes[@]}" -C "${source}" . | pv -f -s "$total_bytes" | tar -xf - -C "${destination}"
+  fi
+}
+
 copy_progress() {
   local source="$1"
   local destination="$2"
-  local total_bytes="$(du -sb "$source" | cut -f1)"
+  local total_bytes="$(du -sbx "$source" | cut -f1)"
   mkdir -p "$destination"
-  tar -cf - -C "${source}" . | pv -f -s $total_bytes | tar -xf - -C "${destination}"
+  tar -cf - --one-file-system -C "${source}" . | pv -f -s "$total_bytes" | tar -xf - -C "${destination}"
 }
