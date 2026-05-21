@@ -156,6 +156,7 @@ MAKEFLAGS="-j${NPROC}"
 # Keep global USE modest so Portage can match the official binhost USE sets.
 # Package-specific USE below adds only the flags shimboot needs.
 USE="X udev elogind policykit pulseaudio gawk -selinux"
+INPUT_DEVICES="libinput evdev synaptics"
 
 # Use official binary packages by default, with GPG signature verification.
 FEATURES="getbinpkg binpkg-request-signature"
@@ -188,6 +189,7 @@ sys-auth/polkit elogind
 sys-fs/udisks elogind
 x11-misc/lightdm elogind
 x11-drivers/xf86-input-libinput udev
+x11-base/xorg-drivers input_devices_libinput input_devices_evdev input_devices_synaptics
 x11-base/xorg-server udev
 media-libs/mesa X
 # lightdm-gtk-greeter pulls GTK/Pango/Librsvg binpkgs that require freetype[harfbuzz,png]
@@ -258,12 +260,13 @@ essential_packages=(
   x11-apps/xinit
   x11-apps/xauth
   sys-apps/kbd
-  x11-drivers/xf86-input-evdev
 )
 
 graphics_packages=(
   x11-base/xorg-server
   x11-drivers/xf86-input-libinput
+  x11-drivers/xf86-input-evdev
+  x11-drivers/xf86-input-synaptics
   media-libs/mesa
 )
 
@@ -380,10 +383,10 @@ print_info "Configuring OpenRC services..."
 
 # Core OpenRC boot services. Add only if the service exists so this remains
 # compatible across Gentoo stage3 snapshots.
-for svc in devfs sysfs procfs dmesg udev; do
+for svc in devfs sysfs procfs dmesg udev udev-trigger mdev shimboot-mdev; do
   [ -x "/etc/init.d/$svc" ] && rc-update add "$svc" sysinit 2>/dev/null || true
 done
-for svc in udev-trigger modules hwclock sysctl hostname bootmisc localmount swap; do
+for svc in modules hwclock sysctl hostname bootmisc localmount swap; do
   [ -x "/etc/init.d/$svc" ] && rc-update add "$svc" boot 2>/dev/null || true
 done
 for svc in mount-ro killprocs savecache; do
@@ -581,6 +584,25 @@ MDEVSERVICEEOF
 chmod +x /etc/init.d/shimboot-mdev
 rm -f /etc/runlevels/*/shimboot-mdev 2>/dev/null || true
 rc-update add shimboot-mdev sysinit 2>/dev/null || true
+
+cat > /etc/init.d/mdev << 'MDEVCOMPATEOF'
+#!/sbin/openrc-run
+
+# Alpine-compatible mdev service for shimboot Gentoo.
+# This intentionally mirrors Alpine shimboot's device manager path more closely
+# than pure Gentoo udev, while still allowing udev to run afterwards.
+
+description="Populate /dev with busybox mdev"
+command="/usr/local/bin/shimboot-mdev-scan"
+
+depend() {
+    need devfs sysfs
+    before udev udev-trigger modules shimboot-hwmods shimboot-xfce
+}
+MDEVCOMPATEOF
+chmod +x /etc/init.d/mdev
+rm -f /etc/runlevels/*/mdev 2>/dev/null || true
+rc-update add mdev sysinit 2>/dev/null || true
 
 cat > /usr/local/bin/shimboot-load-hwmods << 'HWMODSEOF'
 #!/bin/sh
@@ -845,6 +867,7 @@ chmod +x /etc/init.d/shimboot-xfce
 # Avoid display-manager/xdm races and blank greeter failures. They are left
 # installed for manual debugging, but shimboot-xfce is the default graphical path.
 rm -f /etc/runlevels/*/display-manager /etc/runlevels/*/xdm /etc/runlevels/*/kill-frecon /etc/runlevels/*/shimboot-xfce-fallback /etc/runlevels/*/shimboot-xfce 2>/dev/null || true
+rc-update add mdev sysinit 2>/dev/null || true
 rc-update add shimboot-mdev sysinit 2>/dev/null || true
 rc-update add shimboot-hwmods default 2>/dev/null || true
 rc-update add shimboot-xfce default 2>/dev/null || true
@@ -955,6 +978,12 @@ if [ -d /etc/modules-load.d ]; then
     echo >> /etc/modules
   done
 fi
+
+# Explicit OpenRC module config for ChromeOS input, as used by Gentoo's modules
+# service. Keep it small so boot logs are not spammed by every possible module.
+cat > /etc/conf.d/modules << 'CONFDMODULESEOF'
+modules="cros_ec_keyb i2c_hid i2c_hid_acpi elan_i2c hid_multitouch atmel_mxt_ts elants_i2c raydium_i2c_ts"
+CONFDMODULESEOF
 
 # Clean up. Avoid depclean in strict binpkg mode: if a dependency has no current
 # binpkg, a cleanup pass can turn a successful binary install into a source-build

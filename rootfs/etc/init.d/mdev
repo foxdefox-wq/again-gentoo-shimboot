@@ -1,0 +1,13 @@
+#!/sbin/openrc-run
+
+# Alpine-compatible mdev service for shimboot Gentoo.
+# This intentionally mirrors Alpine shimboot's device manager path more closely
+# than pure Gentoo udev, while still allowing udev to run afterwards.
+
+description="Populate /dev with busybox mdev"
+command="/usr/local/bin/shimboot-mdev-scan"
+
+depend() {
+    need devfs sysfs
+    before udev udev-trigger modules shimboot-hwmods shimboot-xfce
+}
