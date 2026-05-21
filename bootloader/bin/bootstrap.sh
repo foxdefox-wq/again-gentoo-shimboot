@@ -135,6 +135,16 @@ move_mounts() {
     mkdir -p "$newroot_mnt/dev" "$newroot_mnt/dev/pts" "$newroot_mnt/dev/shm"
     mount -t devtmpfs devtmpfs "$newroot_mnt/dev" 2>/dev/null || true
     mkdir -p "$newroot_mnt/dev/pts" "$newroot_mnt/dev/shm"
+
+    # Keep the frecon terminal visible after pivot_root. When we do not move the
+    # initramfs /dev, the old /dev/pts/0 disappears from the new root. Bind it to
+    # /dev/console in the new devtmpfs and make later init redirection use that.
+    if [ -f "/bin/frecon-lite" ] && [ "$TTY1" ]; then
+      rm -f "$newroot_mnt/dev/console"
+      touch "$newroot_mnt/dev/console"
+      mount -o bind "$TTY1" "$newroot_mnt/dev/console" 2>/dev/null || true
+      export TTY1="/dev/console"
+    fi
   fi
 }
 
