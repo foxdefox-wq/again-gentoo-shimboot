@@ -14,7 +14,8 @@ depend() {
 start() {
     ebegin "Starting shimboot XFCE"
 
-    mkdir -p /run /var/log
+    mkdir -p /run /var/log /tmp/.X11-unix
+    chmod 1777 /tmp /tmp/.X11-unix 2>/dev/null || true
     rm -f /tmp/.X0-lock /tmp/.X11-unix/X0 2>/dev/null || true
 
     # Match upstream shimboot/NixOS behavior: release frecon immediately before
@@ -29,7 +30,12 @@ start() {
 
     (
         export SHIMBOOT_XFCE_USER="$_user"
-        exec /usr/bin/xinit /usr/local/bin/shimboot-xinitrc -- :0 -ac -nolisten tcp >> "$_log" 2>&1
+        if [ -x /usr/bin/openvt ]; then
+            exec /usr/bin/openvt -c 7 -f -- \
+                /usr/bin/xinit /usr/local/bin/shimboot-xinitrc -- :0 vt7 -ac -nolisten tcp >> "$_log" 2>&1
+        else
+            exec /usr/bin/xinit /usr/local/bin/shimboot-xinitrc -- :0 vt7 -ac -nolisten tcp >> "$_log" 2>&1
+        fi
     ) &
     echo $! > "$pidfile"
 

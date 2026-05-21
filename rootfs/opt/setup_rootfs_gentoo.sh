@@ -256,6 +256,8 @@ essential_packages=(
   gui-libs/display-manager-init
   x11-apps/xinit
   x11-apps/xauth
+  sys-apps/kbd
+  x11-drivers/xf86-input-evdev
 )
 
 graphics_packages=(
@@ -488,6 +490,22 @@ Section "InputClass"
 EndSection
 LIBINPUTEOF
 
+cat > /etc/X11/xorg.conf.d/45-evdev-fallback.conf << 'EVDEVEOF'
+Section "InputClass"
+    Identifier "evdev keyboard fallback"
+    MatchIsKeyboard "on"
+    MatchDevicePath "/dev/input/event*"
+    Driver "evdev"
+EndSection
+
+Section "InputClass"
+    Identifier "evdev pointer fallback"
+    MatchIsPointer "on"
+    MatchDevicePath "/dev/input/event*"
+    Driver "evdev"
+EndSection
+EVDEVEOF
+
 cat > /usr/local/bin/shimboot-xinitrc << 'XINITRCEOF'
 #!/bin/sh
 user="${SHIMBOOT_XFCE_USER:-user}"
@@ -718,19 +736,32 @@ depend() {
 
 start() {
     ebegin "Starting shimboot XFCE"
-    mkdir -p /run /var/log
+
+    mkdir -p /run /var/log /tmp/.X11-unix
+    chmod 1777 /tmp /tmp/.X11-unix 2>/dev/null || true
     rm -f /tmp/.X0-lock /tmp/.X11-unix/X0 2>/dev/null || true
+
+    # Match upstream shimboot/NixOS behavior: release frecon immediately before
+    # starting X, not earlier in boot.
     /usr/local/bin/kill_frecon >> "$_log" 2>&1 || true
+
     if [ ! -x /usr/bin/xinit ]; then
         echo "xinit is missing" >> "$_log"
         eend 1
         return 1
     fi
+
     (
         export SHIMBOOT_XFCE_USER="$_user"
-        exec /usr/bin/xinit /usr/local/bin/shimboot-xinitrc -- :0 -ac -nolisten tcp >> "$_log" 2>&1
+        if [ -x /usr/bin/openvt ]; then
+            exec /usr/bin/openvt -c 7 -f -- \
+                /usr/bin/xinit /usr/local/bin/shimboot-xinitrc -- :0 vt7 -ac -nolisten tcp >> "$_log" 2>&1
+        else
+            exec /usr/bin/xinit /usr/local/bin/shimboot-xinitrc -- :0 vt7 -ac -nolisten tcp >> "$_log" 2>&1
+        fi
     ) &
     echo $! > "$pidfile"
+
     eend 0
 }
 
