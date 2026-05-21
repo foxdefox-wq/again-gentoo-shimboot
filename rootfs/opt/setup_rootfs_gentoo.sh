@@ -962,7 +962,7 @@ rc-update add mdev sysinit 2>/dev/null || true
 [ -x /etc/init.d/hwdrivers ] && rc-update add hwdrivers sysinit 2>/dev/null || true
 rc-update del shimboot-hwmods default 2>/dev/null || true
 rm -f /etc/runlevels/*/shimboot-hwmods 2>/dev/null || true
-rc-update del shimboot-xfce default 2>/dev/null || true
+rc-update add shimboot-xfce default 2>/dev/null || true
 for level in boot default nonetwork; do
   rc-update del local "$level" 2>/dev/null || true
 done
@@ -1055,22 +1055,12 @@ if [ -f "/home/$username/.bashrc" ]; then
   fi
 fi
 
-# Autologin on tty1 and start XFCE from the user's login shell. This mirrors the
-# important upstream behavior: a real user session exists before X opens input.
-cat > "/home/$username/.bash_profile" << 'BASHPROFILEEOF'
-# shimboot autostart XFCE on first tty login
-if [ -z "$DISPLAY" ] && [ "$(tty 2>/dev/null)" = "/dev/tty1" ]; then
-  exec /usr/local/bin/shimboot-start-user-xfce
-fi
-BASHPROFILEEOF
-chown "$username:$username" "/home/$username/.bash_profile" 2>/dev/null || true
-
-if [ -f /etc/inittab ]; then
-  if grep -q '^c1:' /etc/inittab; then
-    sed -i "s#^c1:.*#c1:12345:once:/sbin/agetty --autologin $username --noclear 38400 tty1 linux#" /etc/inittab
-  else
-    echo "c1:12345:once:/sbin/agetty --autologin $username --noclear 38400 tty1 linux" >> /etc/inittab
-  fi
+# Do not autostart XFCE from inittab/getty. The OpenRC shimboot-xfce service
+# starts the desktop directly, like the rest of this OpenRC boot setup. Leaving
+# tty1 as a normal getty avoids respawn loops and "Starting local" dead-ends.
+rm -f "/home/$username/.bash_profile" 2>/dev/null || true
+if [ -f /etc/inittab ] && grep -q '^c1:' /etc/inittab; then
+  sed -i 's#^c1:.*#c1:12345:respawn:/sbin/agetty 38400 tty1 linux#' /etc/inittab
 fi
 
 # Set proper shell for root
