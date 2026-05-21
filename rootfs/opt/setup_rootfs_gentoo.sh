@@ -486,129 +486,11 @@ exec dbus-run-session -- startxfce4
 STARTXFCEEOF
 chmod +x /usr/local/bin/shimboot-startxfce
 
-# Let the fallback start Xorg as the user even when no physical Linux console
-cat > /usr/local/bin/shimboot-start-user-xfce << 'USERXFCEEOF'
-#!/bin/sh
-
-# Started from the autologin user's shell. This gives elogind/PAM a real user
-# session before X starts, which is what upstream Shimboot gets from
-# systemd+LightDM and what root-run OpenRC services do not provide.
-
-[ -n "$DISPLAY" ] && exec /bin/bash --login
-
-log=/var/log/shimboot-user-xfce.log
-lock=/run/shimboot-user-xfce.lock
-mkdir -p /run /var/log /tmp/.X11-unix
-chmod 1777 /tmp /tmp/.X11-unix 2>/dev/null || true
-
-# Do not exit if another instance exists; exiting makes sysvinit respawn tty1
-# rapidly and disables it for 5 minutes. Stay in a shell instead.
-if ! mkdir "$lock" 2>/dev/null; then
-    echo "shimboot-start-user-xfce: already running, opening shell" >>"$log"
-    exec /bin/bash --login
-fi
-trap 'rmdir "$lock" 2>/dev/null || true' EXIT INT TERM
-
-echo "$(date): preparing hardware/input" >>"$log"
-/usr/local/bin/shimboot-load-hwmods >>"$log" 2>&1 || true
-/usr/local/bin/kill_frecon >>"$log" 2>&1 || true
-
-# Match logind ACL behavior explicitly for OpenRC.
-chgrp -R input /dev/input 2>>"$log" || true
-chmod a+rw /dev/input/event* /dev/input/mouse* /dev/input/mice /dev/input/js* 2>>"$log" || true
-
-export XDG_SESSION_TYPE=x11
-export DESKTOP_SESSION=xfce
-export XDG_CURRENT_DESKTOP=XFCE
-export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-mkdir -p "$XDG_RUNTIME_DIR"
-chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
-
-echo "$(date): starting XFCE via startx" >>"$log"
-startx /usr/local/bin/shimboot-startxfce -- :0 vt7 -ac -nolisten tcp >>"$log" 2>&1
-rc=$?
-echo "$(date): startx exited with status $rc; leaving tty shell open to avoid respawn loop" >>"$log"
-
-exec /bin/bash --login
-USERXFCEEOF
-chmod +x /usr/local/bin/shimboot-start-user-xfce
-
-# login happened first.
-mkdir -p /etc/X11
-cat > /etc/X11/Xwrapper.config << 'XWRAPPEREOF'
-allowed_users=anybody
-needs_root_rights=yes
-XWRAPPEREOF
-
+# Do not force Xorg input/video configuration. Upstream shimboot lets the distro's
+# display manager and Xorg auto-detect devices after ChromeOS drivers/firmware
+# are copied into the rootfs.
 mkdir -p /etc/X11/xorg.conf.d
-cat > /etc/X11/xorg.conf.d/20-shimboot.conf << 'XORGEOF'
-Section "Device"
-    Identifier "ChromeOS KMS"
-    Driver "modesetting"
-    Option "AccelMethod" "none"
-    Option "ShadowFB" "true"
-EndSection
-XORGEOF
-
-cat > /etc/X11/xorg.conf.d/40-libinput.conf << 'LIBINPUTEOF'
-Section "InputClass"
-    Identifier "libinput keyboard catchall"
-    MatchIsKeyboard "on"
-    MatchDevicePath "/dev/input/event*"
-    Driver "libinput"
-EndSection
-
-Section "InputClass"
-    Identifier "libinput pointer catchall"
-    MatchIsPointer "on"
-    MatchDevicePath "/dev/input/event*"
-    Driver "libinput"
-EndSection
-
-Section "InputClass"
-    Identifier "libinput touchpad catchall"
-    MatchIsTouchpad "on"
-    MatchDevicePath "/dev/input/event*"
-    Driver "libinput"
-EndSection
-
-Section "InputClass"
-    Identifier "libinput touchscreen catchall"
-    MatchIsTouchscreen "on"
-    MatchDevicePath "/dev/input/event*"
-    Driver "libinput"
-EndSection
-LIBINPUTEOF
-
-cat > /etc/X11/xorg.conf.d/45-evdev-fallback.conf << 'EVDEVEOF'
-Section "InputClass"
-    Identifier "evdev keyboard fallback"
-    MatchIsKeyboard "on"
-    MatchDevicePath "/dev/input/event*"
-    Driver "evdev"
-EndSection
-
-Section "InputClass"
-    Identifier "evdev pointer fallback"
-    MatchIsPointer "on"
-    MatchDevicePath "/dev/input/event*"
-    Driver "evdev"
-EndSection
-EVDEVEOF
-
-cat > /etc/X11/xorg.conf.d/10-shimboot-serverflags.conf << 'SERVERFLAGSEOF'
-Section "ServerFlags"
-    Option "AutoAddDevices" "true"
-    Option "AutoEnableDevices" "true"
-EndSection
-SERVERFLAGSEOF
-
-mkdir -p /etc/udev/rules.d
-cat > /etc/udev/rules.d/99-shimboot-input.rules << 'UDEVRULESEOF'
-KERNEL=="event*", SUBSYSTEM=="input", GROUP="input", MODE="0666"
-KERNEL=="mouse*", SUBSYSTEM=="input", GROUP="input", MODE="0666"
-KERNEL=="js*", SUBSYSTEM=="input", GROUP="input", MODE="0666"
-UDEVRULESEOF
+rm -f /etc/X11/xorg.conf.d/10-shimboot-serverflags.conf       /etc/X11/xorg.conf.d/20-shimboot.conf       /etc/X11/xorg.conf.d/40-libinput.conf       /etc/X11/xorg.conf.d/45-evdev-fallback.conf 2>/dev/null || true
 
 cat > /usr/local/bin/shimboot-xinitrc << 'XINITRCEOF'
 #!/bin/sh
@@ -985,89 +867,26 @@ stop() {
 SHIMBOOTXFCEEOF
 chmod +x /etc/init.d/shimboot-xfce
 
-# Start LightDM with a shimboot-specific wrapper that kills frecon and then
-# execs LightDM in the same service. This avoids OpenRC ordering races where
-# kill-frecon runs but display-manager never follows.
-rm -f /etc/runlevels/*/display-manager /etc/runlevels/*/xdm /etc/runlevels/*/kill-frecon /etc/runlevels/*/shimboot-xfce-fallback /etc/runlevels/*/shimboot-xfce /etc/runlevels/*/shimboot-lightdm 2>/dev/null || true
+# Use the upstream shimboot model: a oneshot kill-frecon service runs before the
+# distro display manager, then the display manager starts X normally.
+rm -f /etc/runlevels/*/shimboot-lightdm /etc/runlevels/*/shimboot-xfce /etc/runlevels/*/shimboot-hwmods /etc/runlevels/*/shimboot-mdev /etc/runlevels/*/mdev /etc/runlevels/*/local 2>/dev/null || true
 rc-update add devfs sysinit 2>/dev/null || true
 [ -x /etc/init.d/hwdrivers ] && rc-update add hwdrivers sysinit 2>/dev/null || true
 for level in sysinit boot default nonetwork; do
   rc-update del mdev "$level" 2>/dev/null || true
   rc-update del shimboot-mdev "$level" 2>/dev/null || true
   rc-update del shimboot-hwmods "$level" 2>/dev/null || true
-  rc-update del local "$level" 2>/dev/null || true
   rc-update del shimboot-xfce "$level" 2>/dev/null || true
-  rc-update del display-manager "$level" 2>/dev/null || true
-  rc-update del xdm "$level" 2>/dev/null || true
-  rc-update del kill-frecon "$level" 2>/dev/null || true
+  rc-update del shimboot-lightdm "$level" 2>/dev/null || true
+  rc-update del local "$level" 2>/dev/null || true
 done
-rm -f /etc/runlevels/*/mdev /etc/runlevels/*/shimboot-mdev /etc/runlevels/*/shimboot-hwmods /etc/runlevels/*/local /etc/runlevels/*/shimboot-xfce /etc/runlevels/*/display-manager /etc/runlevels/*/xdm /etc/runlevels/*/kill-frecon 2>/dev/null || true
-
-cat > /usr/local/bin/shimboot-run-lightdm << 'RUNLIGHTDMEOF'
-#!/bin/sh
-
-log=/var/log/shimboot-lightdm.log
-mkdir -p /var/log/lightdm /run/lightdm /tmp/.X11-unix
-chmod 1777 /tmp /tmp/.X11-unix 2>/dev/null || true
-chown root:lightdm /run/lightdm /var/log/lightdm 2>/dev/null || true
-chmod 755 /run/lightdm /var/log/lightdm 2>/dev/null || true
-
-echo "$(date): preparing display for LightDM" >> "$log"
-
-# Upstream shimboot does exactly this before the display manager starts.
-/usr/local/bin/kill_frecon >> "$log" 2>&1 || true
-
-# OpenRC/logind ACL fallback: make input readable to X/greeter.
-mkdir -p /dev/input
-chgrp -R input /dev/input 2>>"$log" || true
-chmod a+rw /dev/input/event* /dev/input/mouse* /dev/input/mice /dev/input/js* 2>>"$log" || true
-
-# Clean stale X sockets/locks from previous failed attempts.
-rm -f /tmp/.X0-lock /tmp/.X11-unix/X0 2>/dev/null || true
-
-if [ -x /usr/bin/lightdm ]; then
-    echo "$(date): exec /usr/bin/lightdm" >> "$log"
-    exec /usr/bin/lightdm >> "$log" 2>&1
-elif [ -x /usr/sbin/lightdm ]; then
-    echo "$(date): exec /usr/sbin/lightdm" >> "$log"
-    exec /usr/sbin/lightdm >> "$log" 2>&1
+rm -f /etc/runlevels/*/mdev /etc/runlevels/*/shimboot-mdev /etc/runlevels/*/shimboot-hwmods /etc/runlevels/*/shimboot-xfce /etc/runlevels/*/shimboot-lightdm /etc/runlevels/*/local 2>/dev/null || true
+rc-update add kill-frecon default 2>/dev/null || true
+if [ -x /etc/init.d/display-manager ]; then
+  rc-update add display-manager default 2>/dev/null || true
 else
-    echo "$(date): lightdm binary not found" >> "$log"
-    exit 1
+  rc-update add xdm default 2>/dev/null || true
 fi
-RUNLIGHTDMEOF
-chmod +x /usr/local/bin/shimboot-run-lightdm
-
-cat > /etc/init.d/shimboot-lightdm << 'LIGHTDMSERVICEEOF'
-#!/sbin/openrc-run
-
-description="Start LightDM for shimboot Gentoo"
-command="/usr/local/bin/shimboot-run-lightdm"
-command_background="yes"
-pidfile="/run/shimboot-lightdm.pid"
-
-depend() {
-    need localmount dbus
-    after bootmisc modules elogind NetworkManager
-    use elogind
-}
-
-start_pre() {
-    mkdir -p /run /var/log /var/log/lightdm /run/lightdm
-    rm -f /run/shimboot-lightdm.pid /tmp/.X0-lock /tmp/.X11-unix/X0 2>/dev/null || true
-}
-
-stop() {
-    ebegin "Stopping LightDM"
-    start-stop-daemon --stop --quiet --retry TERM/5/KILL/5 --pidfile "$pidfile" 2>/dev/null || true
-    pkill -9 lightdm 2>/dev/null || true
-    pkill -9 lightdm-gtk-greeter 2>/dev/null || true
-    pkill -9 Xorg 2>/dev/null || true
-    eend 0
-}
-LIGHTDMSERVICEEOF
-chmod +x /etc/init.d/shimboot-lightdm
-rc-update add shimboot-lightdm default 2>/dev/null || true
 
 # Configure LightDM
 print_info "Configuring LightDM..."
@@ -1090,6 +909,8 @@ autologin-session=xfce
 user-session=xfce
 greeter-session=lightdm-gtk-greeter
 allow-user-switching=true
+minimum-vt=7
+xserver-command=X -background none -nolisten tcp vt7
 LDMEOF
 
 mkdir -p /etc/lightdm/lightdm-gtk-greeter.conf.d
