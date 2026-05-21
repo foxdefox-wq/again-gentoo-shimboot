@@ -166,6 +166,8 @@ dev-libs/libdbusmenu gtk3
 # thunar-volman requires thunar[udisks], which pulls gvfs[udisks,udev]
 xfce-base/thunar udisks
 gnome-base/gvfs udisks udev
+# NetworkManager[wifi] requires wpa_supplicant[dbus]
+net-wireless/wpa_supplicant dbus
 USEEOF
 
 # Helper that installs packages through the binhost-aware Portage config.
