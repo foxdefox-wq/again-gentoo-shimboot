@@ -1,0 +1,20 @@
+#!/bin/sh
+
+# xinit client script run as root. The X server is started with -ac by
+# shimboot-xfce, then this drops to the normal user for the actual desktop.
+
+user="${SHIMBOOT_XFCE_USER:-user}"
+uid="$(id -u "$user" 2>/dev/null || true)"
+gid="$(id -g "$user" 2>/dev/null || true)"
+
+if [ -z "$uid" ] || [ -z "$gid" ]; then
+    echo "shimboot-xinitrc: user '$user' not found" >&2
+    exit 1
+fi
+
+mkdir -p "/run/user/$uid"
+chown "$uid:$gid" "/run/user/$uid"
+chmod 700 "/run/user/$uid"
+
+export DISPLAY="${DISPLAY:-:0}"
+exec su - "$user" -c "DISPLAY='$DISPLAY' XDG_RUNTIME_DIR='/run/user/$uid' XDG_SESSION_TYPE=x11 DESKTOP_SESSION=xfce XDG_CURRENT_DESKTOP=XFCE dbus-run-session -- startxfce4"

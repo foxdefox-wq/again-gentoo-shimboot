@@ -424,10 +424,8 @@ cat > /usr/local/bin/kill_frecon << 'KILLFRECONEOF'
 umount -l /dev/console 2>/dev/null || true
 pkill -9 frecon-lite 2>/dev/null || true
 pkill -9 frecon 2>/dev/null || true
-if [ ! -c /dev/console ]; then
-    rm -f /dev/console 2>/dev/null || true
-    mknod -m 600 /dev/console c 5 1 2>/dev/null || true
-fi
+# Keep /dev/console as the regular file left by the shimboot bootloader. This
+# matches upstream shimboot and avoids ChromeOS-kernel console/VT weirdness.
 sleep 1
 exit 0
 KILLFRECONEOF
@@ -449,6 +447,33 @@ cat > /etc/X11/Xwrapper.config << 'XWRAPPEREOF'
 allowed_users=anybody
 needs_root_rights=yes
 XWRAPPEREOF
+
+mkdir -p /etc/X11/xorg.conf.d
+cat > /etc/X11/xorg.conf.d/20-shimboot.conf << 'XORGEOF'
+Section "Device"
+    Identifier "ChromeOS KMS"
+    Driver "modesetting"
+    Option "AccelMethod" "none"
+    Option "ShadowFB" "true"
+EndSection
+XORGEOF
+
+cat > /usr/local/bin/shimboot-xinitrc << 'XINITRCEOF'
+#!/bin/sh
+user="${SHIMBOOT_XFCE_USER:-user}"
+uid="$(id -u "$user" 2>/dev/null || true)"
+gid="$(id -g "$user" 2>/dev/null || true)"
+if [ -z "$uid" ] || [ -z "$gid" ]; then
+    echo "shimboot-xinitrc: user '$user' not found" >&2
+    exit 1
+fi
+mkdir -p "/run/user/$uid"
+chown "$uid:$gid" "/run/user/$uid"
+chmod 700 "/run/user/$uid"
+export DISPLAY="${DISPLAY:-:0}"
+exec su - "$user" -c "DISPLAY='$DISPLAY' XDG_RUNTIME_DIR='/run/user/$uid' XDG_SESSION_TYPE=x11 DESKTOP_SESSION=xfce XDG_CURRENT_DESKTOP=XFCE dbus-run-session -- startxfce4"
+XINITRCEOF
+chmod +x /usr/local/bin/shimboot-xinitrc
 
 # Kill frecon helper service. It runs in the default runlevel immediately before
 # the display manager, not in boot, so the visible console is released only when
@@ -518,71 +543,60 @@ stop() {
 XDMEOF
 chmod +x /etc/init.d/xdm
 
-# Prefer Gentoo's real display-manager service when available. It starts LightDM
-# using Gentoo's supported /etc/conf.d/display-manager path. Keep xdm only as a
-# fallback for older snapshots without display-manager-init.
-rm -f /etc/runlevels/*/display-manager /etc/runlevels/*/xdm /etc/runlevels/*/kill-frecon 2>/dev/null || true
-if [ -x /etc/init.d/display-manager ]; then
-  rc-update add kill-frecon default 2>/dev/null || true
-  rc-update add display-manager default 2>/dev/null || true
-else
-  rc-update add xdm default 2>/dev/null || true
-fi
-
-# If LightDM/X fails to produce an XFCE session, start one directly after a short
-# delay. This prevents a permanent blank screen while still trying LightDM first.
-cat > /etc/init.d/shimboot-xfce-fallback << 'XFCEFALLBACKEOF'
+# Start XFCE directly. LightDM remains installed/configured, but direct xinit is
+# the default because it is more reliable in the ChromeOS shimboot frecon/VT
+# environment. This still uses binpkg-installed XFCE; no manual emerge here.
+cat > /etc/init.d/shimboot-xfce << 'SHIMBOOTXFCEEOF'
 #!/sbin/openrc-run
 
-description="Start an XFCE session if LightDM does not create one"
-command=/bin/true
-
+description="Start XFCE directly for shimboot"
+pidfile="/run/shimboot-xfce.pid"
+_log="/var/log/shimboot-xfce.log"
 _user="${SHIMBOOT_XFCE_USER:-user}"
-_log="/var/log/shimboot-xfce-fallback.log"
 
 depend() {
     need localmount dbus
-    after display-manager xdm elogind
+    after bootmisc modules elogind
     use elogind
 }
 
 start() {
-    ebegin "Scheduling XFCE fallback"
+    ebegin "Starting shimboot XFCE"
+    mkdir -p /run /var/log
+    rm -f /tmp/.X0-lock /tmp/.X11-unix/X0 2>/dev/null || true
+    /usr/local/bin/kill_frecon >> "$_log" 2>&1 || true
+    if [ ! -x /usr/bin/xinit ]; then
+        echo "xinit is missing" >> "$_log"
+        eend 1
+        return 1
+    fi
     (
-        sleep 20
-
-        if pgrep -u "$_user" -x xfce4-session >/dev/null 2>&1; then
-            exit 0
-        fi
-
-        echo "$(date): LightDM did not start XFCE; launching fallback" >> "$_log"
-        /usr/local/bin/kill_frecon >> "$_log" 2>&1 || true
-
-        pkill -9 lightdm >> "$_log" 2>&1 || true
-        pkill -9 lightdm-gtk-greeter >> "$_log" 2>&1 || true
-        pkill -9 Xorg >> "$_log" 2>&1 || true
-        pkill -9 X >> "$_log" 2>&1 || true
-        sleep 2
-
-        uid="$(id -u "$_user" 2>/dev/null || true)"
-        gid="$(id -g "$_user" 2>/dev/null || true)"
-        if [ -z "$uid" ] || [ -z "$gid" ]; then
-            echo "$(date): user $_user not found" >> "$_log"
-            exit 0
-        fi
-
-        mkdir -p "/run/user/$uid"
-        chown "$uid:$gid" "/run/user/$uid"
-        chmod 700 "/run/user/$uid"
-
-        su - "$_user" -c "XDG_RUNTIME_DIR=/run/user/$uid exec startx /usr/local/bin/shimboot-startxfce -- :0 vt7 -nolisten tcp" >> "$_log" 2>&1 &
+        export SHIMBOOT_XFCE_USER="$_user"
+        exec /usr/bin/xinit /usr/local/bin/shimboot-xinitrc -- :0 -ac -nolisten tcp >> "$_log" 2>&1
     ) &
+    echo $! > "$pidfile"
     eend 0
 }
-XFCEFALLBACKEOF
-chmod +x /etc/init.d/shimboot-xfce-fallback
-rm -f /etc/runlevels/*/shimboot-xfce-fallback 2>/dev/null || true
-rc-update add shimboot-xfce-fallback default 2>/dev/null || true
+
+stop() {
+    ebegin "Stopping shimboot XFCE"
+    if [ -f "$pidfile" ]; then
+        kill "$(cat "$pidfile")" 2>/dev/null || true
+        rm -f "$pidfile"
+    fi
+    pkill -9 xfce4-session 2>/dev/null || true
+    pkill -9 startxfce4 2>/dev/null || true
+    pkill -9 Xorg 2>/dev/null || true
+    pkill -9 X 2>/dev/null || true
+    eend 0
+}
+SHIMBOOTXFCEEOF
+chmod +x /etc/init.d/shimboot-xfce
+
+# Avoid display-manager/xdm races and blank greeter failures. They are left
+# installed for manual debugging, but shimboot-xfce is the default graphical path.
+rm -f /etc/runlevels/*/display-manager /etc/runlevels/*/xdm /etc/runlevels/*/kill-frecon /etc/runlevels/*/shimboot-xfce-fallback /etc/runlevels/*/shimboot-xfce 2>/dev/null || true
+rc-update add shimboot-xfce default 2>/dev/null || true
 
 # Configure LightDM
 print_info "Configuring LightDM..."

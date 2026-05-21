@@ -1,0 +1,50 @@
+#!/sbin/openrc-run
+
+description="Start XFCE directly for shimboot"
+pidfile="/run/shimboot-xfce.pid"
+_log="/var/log/shimboot-xfce.log"
+_user="${SHIMBOOT_XFCE_USER:-user}"
+
+depend() {
+    need localmount dbus
+    after bootmisc modules elogind
+    use elogind
+}
+
+start() {
+    ebegin "Starting shimboot XFCE"
+
+    mkdir -p /run /var/log
+    rm -f /tmp/.X0-lock /tmp/.X11-unix/X0 2>/dev/null || true
+
+    # Match upstream shimboot/NixOS behavior: release frecon immediately before
+    # starting X, not earlier in boot.
+    /usr/local/bin/kill_frecon >> "$_log" 2>&1 || true
+
+    if [ ! -x /usr/bin/xinit ]; then
+        echo "xinit is missing" >> "$_log"
+        eend 1
+        return 1
+    fi
+
+    (
+        export SHIMBOOT_XFCE_USER="$_user"
+        exec /usr/bin/xinit /usr/local/bin/shimboot-xinitrc -- :0 -ac -nolisten tcp >> "$_log" 2>&1
+    ) &
+    echo $! > "$pidfile"
+
+    eend 0
+}
+
+stop() {
+    ebegin "Stopping shimboot XFCE"
+    if [ -f "$pidfile" ]; then
+        kill "$(cat "$pidfile")" 2>/dev/null || true
+        rm -f "$pidfile"
+    fi
+    pkill -9 xfce4-session 2>/dev/null || true
+    pkill -9 startxfce4 2>/dev/null || true
+    pkill -9 Xorg 2>/dev/null || true
+    pkill -9 X 2>/dev/null || true
+    eend 0
+}
