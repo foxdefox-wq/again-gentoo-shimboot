@@ -124,7 +124,7 @@ MAKEFLAGS="-j${NPROC}"
 
 # Keep global USE modest so Portage can match the official binhost USE sets.
 # Package-specific USE below adds only the flags shimboot needs.
-USE="X udev elogind policykit pulseaudio gawk"
+USE="X udev elogind policykit pulseaudio gawk -selinux"
 
 # Use official binary packages by default, with GPG signature verification.
 FEATURES="getbinpkg binpkg-request-signature"
@@ -260,34 +260,124 @@ fi
 
 emerge_binpkg "Installing shimboot package set using Gentoo binpkgs..." "${install_packages[@]}"
 
+# Disable SELinux explicitly. Gentoo's normal OpenRC profile is not SELinux, but
+# keep the image unambiguous for packages/tools that check these files.
+print_info "Disabling SELinux..."
+mkdir -p /etc/selinux
+cat > /etc/selinux/config << 'SELINUXEOF'
+SELINUX=disabled
+SELINUXTYPE=targeted
+SELINUXEOF
+
+# The shimboot bootloader mounts the real rootfs before OpenRC starts. Provide a
+# non-empty fstab so OpenRC localmount/checkfs do not complain, and so pseudo
+# filesystems have sane definitions. bootstrap.sh updates the root device line at
+# boot when it knows the selected partition path.
+print_info "Writing shimboot fstab..."
+mkdir -p /proc /sys /dev/pts /run /tmp
+chmod 1777 /tmp
+cat > /etc/fstab << 'FSTABEOF'
+# shimboot-managed-fstab
+# The root device is mounted by the shimboot bootloader and rewritten at boot.
+/dev/root / ext4 defaults,noatime 0 1
+proc /proc proc nosuid,nodev,noexec 0 0
+sysfs /sys sysfs nosuid,nodev,noexec 0 0
+devtmpfs /dev devtmpfs mode=0755,nosuid 0 0
+devpts /dev/pts devpts gid=5,mode=620,nosuid,noexec 0 0
+tmpfs /run tmpfs mode=0755,nosuid,nodev 0 0
+tmpfs /tmp tmpfs mode=1777,nosuid,nodev 0 0
+FSTABEOF
+
+# ChromeOS kernels can make `udevadm trigger` return ENOPROTOOPT ("Protocol
+# driver not attached") for a couple of sysfs devices. That should not stop the
+# boot, so replace Gentoo's strict trigger service with a shimboot-tolerant one
+# that logs trigger failures but always succeeds after best-effort triggering.
+print_info "Installing shimboot-tolerant udev-trigger service..."
+if [ -f /etc/init.d/udev-trigger ] && [ ! -f /etc/init.d/udev-trigger.gentoo ]; then
+  cp -a /etc/init.d/udev-trigger /etc/init.d/udev-trigger.gentoo 2>/dev/null || true
+fi
+cat > /etc/init.d/udev-trigger << 'UDEVTRIGGEREOF'
+#!/sbin/openrc-run
+
+description="Trigger udev coldplug events (shimboot tolerant)"
+command=/bin/true
+
+extra_started_commands="retrigger"
+
+depend() {
+    need udev
+    before modules
+    keyword -lxc -systemd-nspawn -vserver
+}
+
+_start_udev_trigger() {
+    mkdir -p /run
+    : > /run/udev-trigger.log
+
+    # Trigger subsystems first, then devices. Some Chromebook/ChromeOS-kernel
+    # sysfs entries return "Protocol driver not attached"; log those but do not
+    # fail the boot because the rest of udev coldplug still works.
+    udevadm trigger --type=subsystems --action=add >>/run/udev-trigger.log 2>&1 || true
+    udevadm trigger --type=devices --action=add >>/run/udev-trigger.log 2>&1 || true
+    udevadm settle --timeout=15 >>/run/udev-trigger.log 2>&1 || true
+    return 0
+}
+
+start() {
+    ebegin "Triggering udev events"
+    _start_udev_trigger
+    eend 0
+}
+
+retrigger() {
+    ebegin "Retriggering udev events"
+    _start_udev_trigger
+    eend 0
+}
+UDEVTRIGGEREOF
+chmod +x /etc/init.d/udev-trigger
+
 # Configure OpenRC services
 print_info "Configuring OpenRC services..."
 
-# Network
+# Core OpenRC boot services. Add only if the service exists so this remains
+# compatible across Gentoo stage3 snapshots.
+for svc in devfs sysfs procfs dmesg udev; do
+  [ -x "/etc/init.d/$svc" ] && rc-update add "$svc" sysinit 2>/dev/null || true
+done
+for svc in udev-trigger modules hwclock sysctl hostname bootmisc localmount swap; do
+  [ -x "/etc/init.d/$svc" ] && rc-update add "$svc" boot 2>/dev/null || true
+done
+for svc in mount-ro killprocs savecache; do
+  [ -x "/etc/init.d/$svc" ] && rc-update add "$svc" shutdown 2>/dev/null || true
+done
+
+# Network. NetworkManager handles real networking; keep net.eth0 best-effort for
+# simple wired fallback without making boot depend on it.
 cat > /etc/conf.d/net << 'NETEOF'
 config_eth0="dhcp"
 dhcpcd_eth0="-t 10"
 NETEOF
-ln -sf /etc/init.d/net.lo /etc/run/openrc/started/net.eth0 2>/dev/null || true
-rc-update add net.eth0 default 2>/dev/null || true
+[ -e /etc/init.d/net.lo ] && ln -sf /etc/init.d/net.lo /etc/init.d/net.eth0 2>/dev/null || true
+[ -x /etc/init.d/net.eth0 ] && rc-update add net.eth0 default 2>/dev/null || true
 
 # Consolekit for LightDM if available
-rc-update add consolekit boot 2>/dev/null || true
+[ -x /etc/init.d/consolekit ] && rc-update add consolekit boot 2>/dev/null || true
 
 # Dbus
-rc-update add dbus default 2>/dev/null || true
+[ -x /etc/init.d/dbus ] && rc-update add dbus default 2>/dev/null || true
 
 # NetworkManager
-rc-update add NetworkManager default 2>/dev/null || true
+[ -x /etc/init.d/NetworkManager ] && rc-update add NetworkManager default 2>/dev/null || true
 
 # Cron
-rc-update add cronie default 2>/dev/null || true
+[ -x /etc/init.d/cronie ] && rc-update add cronie default 2>/dev/null || true
 
 # Elogind
-rc-update add elogind boot 2>/dev/null || true
+[ -x /etc/init.d/elogind ] && rc-update add elogind boot 2>/dev/null || true
 
 # Zram
-rc-update add zram-init boot 2>/dev/null || true
+[ -x /etc/init.d/zram-init ] && rc-update add zram-init boot 2>/dev/null || true
 
 # Kill frecon service
 cat > /etc/init.d/kill-frecon << 'FRECONEOF'
