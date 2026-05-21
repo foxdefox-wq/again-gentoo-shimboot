@@ -474,8 +474,13 @@ pkill -9 frecon 2>/dev/null || true
 # Give LightDM/X the same effective input access that upstream Debian gets from
 # systemd-logind ACLs. This runs immediately before the display manager.
 mkdir -p /dev/input
+udevadm control --reload-rules 2>/dev/null || true
+udevadm trigger --subsystem-match=input --action=change 2>/dev/null || true
+udevadm trigger --subsystem-match=drm --action=change 2>/dev/null || true
+udevadm settle --timeout=5 2>/dev/null || true
 chgrp -R input /dev/input 2>/dev/null || true
 chmod a+rw /dev/input/event* /dev/input/mouse* /dev/input/mice /dev/input/js* 2>/dev/null || true
+chmod a+rw /dev/dri/* 2>/dev/null || true
 # Keep /dev/console as the regular file left by the shimboot bootloader. This
 # matches upstream shimboot and avoids ChromeOS-kernel console/VT weirdness.
 sleep 1
@@ -533,11 +538,36 @@ Section "InputClass"
     Driver "libinput"
 EndSection
 LIBINPUTEOF
+cat > /etc/X11/xorg.conf.d/45-evdev-fallback.conf << 'EVDEVEOF'
+Section "InputClass"
+    Identifier "evdev keyboard fallback"
+    MatchIsKeyboard "on"
+    MatchDevicePath "/dev/input/event*"
+    Driver "evdev"
+EndSection
+Section "InputClass"
+    Identifier "evdev pointer fallback"
+    MatchIsPointer "on"
+    MatchDevicePath "/dev/input/event*"
+    Driver "evdev"
+EndSection
+Section "InputClass"
+    Identifier "evdev touchpad fallback"
+    MatchIsTouchpad "on"
+    MatchDevicePath "/dev/input/event*"
+    Driver "evdev"
+EndSection
+EVDEVEOF
 cat > /etc/udev/rules.d/99-shimboot-input.rules << 'UDEVRULESEOF'
-KERNEL=="event*", SUBSYSTEM=="input", GROUP="input", MODE="0666"
-KERNEL=="mouse*", SUBSYSTEM=="input", GROUP="input", MODE="0666"
-KERNEL=="mice", SUBSYSTEM=="input", GROUP="input", MODE="0666"
-KERNEL=="js*", SUBSYSTEM=="input", GROUP="input", MODE="0666"
+# ChromeOS shimboot + OpenRC: make internal Chromebook input visible to logind,
+# LightDM, Xorg/libinput. Logs showed keyboard/touchpad event nodes without
+# uaccess/seat tags, so X ignored them.
+ACTION=="add|change", SUBSYSTEM=="input", KERNEL=="event*", ENV{ID_INPUT}="1", ENV{ID_SEAT}="seat0", TAG+="seat", TAG+="uaccess", GROUP="input", MODE="0666"
+ACTION=="add|change", SUBSYSTEM=="input", KERNEL=="mouse*", ENV{ID_INPUT}="1", ENV{ID_SEAT}="seat0", TAG+="seat", TAG+="uaccess", GROUP="input", MODE="0666"
+ACTION=="add|change", SUBSYSTEM=="input", KERNEL=="mice", ENV{ID_INPUT}="1", ENV{ID_SEAT}="seat0", TAG+="seat", TAG+="uaccess", GROUP="input", MODE="0666"
+ACTION=="add|change", SUBSYSTEM=="input", KERNEL=="js*", ENV{ID_INPUT}="1", ENV{ID_SEAT}="seat0", TAG+="seat", TAG+="uaccess", GROUP="input", MODE="0666"
+ACTION=="add|change", SUBSYSTEM=="drm", KERNEL=="card*", TAG+="seat", TAG+="master-of-seat", TAG+="uaccess", MODE="0666"
+ACTION=="add|change", SUBSYSTEM=="drm", KERNEL=="renderD*", TAG+="seat", TAG+="uaccess", MODE="0666"
 UDEVRULESEOF
 
 cat > /usr/local/bin/shimboot-xinitrc << 'XINITRCEOF'
