@@ -901,6 +901,8 @@ cat > /etc/lightdm/lightdm.conf << LDMEOF
 [LightDM]
 log-directory=/var/log/lightdm
 run-directory=/run/lightdm
+# ChromeOS shimboot kernels do not always report seats as graphical to logind.
+logind-check-graphical=false
 
 [Seat:*]
 autologin-user=${username:-user}
@@ -909,8 +911,7 @@ autologin-session=xfce
 user-session=xfce
 greeter-session=lightdm-gtk-greeter
 allow-user-switching=true
-minimum-vt=7
-xserver-command=X -background none -nolisten tcp vt7
+xserver-command=X -background none -nolisten tcp
 LDMEOF
 
 mkdir -p /etc/lightdm/lightdm-gtk-greeter.conf.d
