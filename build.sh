@@ -81,12 +81,22 @@ print_info "creating disk image"
 # the rootfs, du/tar will try to traverse the host pseudo filesystems (including
 # /proc/kcore). Unmount them before sizing/copying the rootfs.
 unmount_rootfs_pseudo_mounts
-rootfs_size="$(du -smx "$rootfs_dir" | cut -f 1)"
-rootfs_part_size="$(($rootfs_size * 15 / 10 + 512))"
+rootfs_size="$(du -smx \
+  --exclude="$rootfs_dir/proc/*" \
+  --exclude="$rootfs_dir/sys/*" \
+  --exclude="$rootfs_dir/dev/*" \
+  --exclude="$rootfs_dir/run/*" \
+  --exclude="$rootfs_dir/var/cache/binhost/*" \
+  --exclude="$rootfs_dir/var/cache/binpkgs/*" \
+  --exclude="$rootfs_dir/var/cache/distfiles/*" \
+  --exclude="$rootfs_dir/var/tmp/portage/*" \
+  --exclude="$rootfs_dir/var/db/repos/gentoo/*" \
+  "$rootfs_dir" | cut -f 1)"
+rootfs_part_size="$(($rootfs_size * 13 / 10 + 512))"
 #create a 20mb bootloader partition
-#rootfs partition is 50% larger than its contents, plus 512MiB slack for
-#filesystem metadata/inodes. Gentoo has lots of small files, and the old 20%
-#slack could run out of space/inodes while tar was copying the rootfs.
+#rootfs partition is 30% larger than copied contents, plus 512MiB slack for
+#filesystem metadata/inodes. Gentoo has lots of small files, and Portage caches
+#are excluded from both sizing and final copy.
 create_image "$output_path" 20 "$rootfs_part_size" "$bootloader_part_name"
 
 print_info "creating loop device for the image"

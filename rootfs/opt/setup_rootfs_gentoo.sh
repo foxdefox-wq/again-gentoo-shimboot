@@ -255,7 +255,6 @@ essential_packages=(
   sys-fs/udisks
   sys-block/zram-init
   app-shells/bash-completion
-  sys-kernel/linux-firmware
   gui-libs/display-manager-init
   x11-apps/xinit
   x11-apps/xauth
@@ -383,7 +382,13 @@ print_info "Configuring OpenRC services..."
 
 # Core OpenRC boot services. Add only if the service exists so this remains
 # compatible across Gentoo stage3 snapshots.
-for svc in devfs sysfs procfs dmesg udev udev-trigger mdev shimboot-mdev; do
+# Preserve /dev from the shimboot initramfs. The bootloader moves /dev into the
+# rootfs before OpenRC starts; remounting devfs/devtmpfs can drop the ChromeOS
+# input device nodes that frecon was already using.
+for svc in devfs mdev shimboot-mdev; do
+  rc-update del "$svc" sysinit 2>/dev/null || true
+done
+for svc in sysfs procfs dmesg udev udev-trigger; do
   [ -x "/etc/init.d/$svc" ] && rc-update add "$svc" sysinit 2>/dev/null || true
 done
 for svc in modules hwclock sysctl hostname bootmisc localmount swap; do
@@ -583,7 +588,6 @@ depend() {
 MDEVSERVICEEOF
 chmod +x /etc/init.d/shimboot-mdev
 rm -f /etc/runlevels/*/shimboot-mdev 2>/dev/null || true
-rc-update add shimboot-mdev sysinit 2>/dev/null || true
 
 cat > /etc/init.d/mdev << 'MDEVCOMPATEOF'
 #!/sbin/openrc-run
@@ -602,7 +606,6 @@ depend() {
 MDEVCOMPATEOF
 chmod +x /etc/init.d/mdev
 rm -f /etc/runlevels/*/mdev 2>/dev/null || true
-rc-update add mdev sysinit 2>/dev/null || true
 
 cat > /usr/local/bin/shimboot-load-hwmods << 'HWMODSEOF'
 #!/bin/sh
@@ -724,8 +727,8 @@ description="Load Chromebook hardware/input modules for shimboot"
 command="/usr/local/bin/shimboot-load-hwmods"
 
 depend() {
-    need devfs sysfs shimboot-mdev
-    after shimboot-mdev modules
+    need sysfs
+    after udev-trigger modules
     before display-manager xdm shimboot-xfce
 }
 HWMODSSERVICEEOF
@@ -867,8 +870,9 @@ chmod +x /etc/init.d/shimboot-xfce
 # Avoid display-manager/xdm races and blank greeter failures. They are left
 # installed for manual debugging, but shimboot-xfce is the default graphical path.
 rm -f /etc/runlevels/*/display-manager /etc/runlevels/*/xdm /etc/runlevels/*/kill-frecon /etc/runlevels/*/shimboot-xfce-fallback /etc/runlevels/*/shimboot-xfce 2>/dev/null || true
-rc-update add mdev sysinit 2>/dev/null || true
-rc-update add shimboot-mdev sysinit 2>/dev/null || true
+rc-update del devfs sysinit 2>/dev/null || true
+rc-update del mdev sysinit 2>/dev/null || true
+rc-update del shimboot-mdev sysinit 2>/dev/null || true
 rc-update add shimboot-hwmods default 2>/dev/null || true
 rc-update add shimboot-xfce default 2>/dev/null || true
 
@@ -978,12 +982,6 @@ if [ -d /etc/modules-load.d ]; then
     echo >> /etc/modules
   done
 fi
-
-# Explicit OpenRC module config for ChromeOS input, as used by Gentoo's modules
-# service. Keep it small so boot logs are not spammed by every possible module.
-cat > /etc/conf.d/modules << 'CONFDMODULESEOF'
-modules="cros_ec_keyb i2c_hid i2c_hid_acpi elan_i2c hid_multitouch atmel_mxt_ts elants_i2c raydium_i2c_ts"
-CONFDMODULESEOF
 
 # Clean up. Avoid depclean in strict binpkg mode: if a dependency has no current
 # binpkg, a cleanup pass can turn a successful binary install into a source-build

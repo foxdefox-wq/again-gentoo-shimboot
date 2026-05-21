@@ -65,11 +65,6 @@ copy_modules() {
     sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' "$mod_file" >> "${target_rootfs}/etc/modules"
     echo >> "${target_rootfs}/etc/modules"
   done
-  mkdir -p "${target_rootfs}/etc/conf.d"
-  cat > "${target_rootfs}/etc/conf.d/modules" << 'CONFDMODULESEOF'
-modules="cros_ec_keyb i2c_hid i2c_hid_acpi elan_i2c hid_multitouch atmel_mxt_ts elants_i2c raydium_i2c_ts"
-CONFDMODULESEOF
-
   #decompress kernel modules if necessary - debian won't recognize these otherwise
   local compressed_files="$(find "${target_rootfs}/lib/modules" -name '*.gz')"
   if [ "$compressed_files" ]; then
@@ -84,6 +79,35 @@ CONFDMODULESEOF
   done
 }
 
+prune_firmware() {
+  local firmware_dir="$1"
+  [ -d "$firmware_dir" ] || return 0
+
+  # Keep Chromebook essentials: Intel/Realtek/Broadcom/Qualcomm/MediaTek WiFi,
+  # CPU/GPU microcode, regulatory DB, and ChromeOS touch firmware links. Delete
+  # unrelated firmware families so Gentoo images do not balloon to many GB.
+  find "$firmware_dir" -type f \
+    ! -path "*/intel/*" \
+    ! -path "*/iwlwifi/*" \
+    ! -path "*/rtw88/*" \
+    ! -path "*/rtw89/*" \
+    ! -path "*/rtl_bt/*" \
+    ! -path "*/brcm/*" \
+    ! -path "*/ath10k/*" \
+    ! -path "*/ath11k/*" \
+    ! -path "*/mediatek/*" \
+    ! -path "*/qca/*" \
+    ! -path "*/amdgpu/*" \
+    ! -name "regulatory.db*" \
+    ! -name "*.ucode" \
+    ! -iname "*elan*" \
+    ! -iname "*atmel*" \
+    ! -iname "*mxt*" \
+    ! -iname "*touch*" \
+    -delete 2>/dev/null || true
+  find "$firmware_dir" -type d -empty -delete 2>/dev/null || true
+}
+
 copy_firmware() {
   local firmware_path="/tmp/chromium-firmware"
   local target_rootfs=$(realpath -m $1)
@@ -93,6 +117,7 @@ copy_firmware() {
   fi
 
   cp -r --remove-destination "${firmware_path}/"* "${target_rootfs}/lib/firmware/"
+  prune_firmware "${target_rootfs}/lib/firmware"
 }
 
 download_firmware() {
