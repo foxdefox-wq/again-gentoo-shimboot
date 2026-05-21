@@ -1,0 +1,102 @@
+#!/bin/sh
+
+# Generate an Xorg config that directly opens the Chromebook input event nodes.
+# This bypasses LightDM/logind/udev seat ACL problems.  The kernel already sees
+# the devices; we just tell Xorg exactly which /dev/input/event* files to use.
+
+out=/etc/X11/shimboot-xorg.conf
+log=/var/log/shimboot-xorg-input.log
+mkdir -p /etc/X11 /dev/input /var/log
+: > "$log"
+
+# Ensure event nodes exist even if udev did not make them yet. Event device minor
+# numbers are 64 + event number.
+if [ -r /proc/bus/input/devices ]; then
+    grep -o 'event[0-9][0-9]*' /proc/bus/input/devices | sort -u | while read -r ev; do
+        n="${ev#event}"
+        [ -e "/dev/input/$ev" ] || mknod -m 666 "/dev/input/$ev" c 13 "$((64 + n))" 2>/dev/null || true
+    done
+fi
+[ -e /dev/input/mice ] || mknod -m 666 /dev/input/mice c 13 63 2>/dev/null || true
+chmod a+rw /dev/input/event* /dev/input/mouse* /dev/input/mice 2>/dev/null || true
+
+find_event_by_name() {
+    pattern="$1"
+    awk -v pat="$pattern" '
+        BEGIN { RS=""; FS="\n"; IGNORECASE=1 }
+        $0 ~ pat {
+            for (i=1; i<=NF; i++) {
+                if ($i ~ /^H: Handlers=/) {
+                    n=split($i, a, " ")
+                    for (j=1; j<=n; j++) if (a[j] ~ /^event[0-9]+$/) { print "/dev/input/" a[j]; exit }
+                }
+            }
+        }
+    ' /proc/bus/input/devices 2>/dev/null
+}
+
+keyboard="$(find_event_by_name 'AT Translated Set 2 keyboard|cros_ec_keyb|Keyboard')"
+touchpad="$(find_event_by_name 'Elan Touchpad|Touchpad|ELAN|SYNA|Synaptics')"
+
+# Dedede fallback from collected logs: event2 keyboard, event5 Elan touchpad.
+[ -n "$keyboard" ] || keyboard=/dev/input/event2
+[ -n "$touchpad" ] || touchpad=/dev/input/event5
+
+{
+    echo "keyboard=$keyboard"
+    echo "touchpad=$touchpad"
+    echo "--- /proc/bus/input/devices ---"
+    cat /proc/bus/input/devices 2>/dev/null || true
+    echo "--- /dev/input ---"
+    ls -la /dev/input 2>/dev/null || true
+} >> "$log"
+
+cat > "$out" <<EOFCONF
+Section "ServerLayout"
+    Identifier "ShimbootLayout"
+    Screen 0 "Screen0" 0 0
+    InputDevice "Keyboard0" "CoreKeyboard"
+    InputDevice "Touchpad0" "CorePointer"
+EndSection
+
+Section "ServerFlags"
+    Option "AutoAddDevices" "false"
+    Option "AutoEnableDevices" "false"
+    Option "AllowEmptyInput" "false"
+EndSection
+
+Section "Device"
+    Identifier "Device0"
+    Driver "modesetting"
+    Option "AccelMethod" "none"
+EndSection
+
+Section "Monitor"
+    Identifier "Monitor0"
+EndSection
+
+Section "Screen"
+    Identifier "Screen0"
+    Device "Device0"
+    Monitor "Monitor0"
+EndSection
+
+Section "InputDevice"
+    Identifier "Keyboard0"
+    Driver "evdev"
+    Option "Device" "$keyboard"
+    Option "GrabDevice" "false"
+    Option "XkbRules" "evdev"
+    Option "XkbModel" "pc105"
+    Option "XkbLayout" "us"
+EndSection
+
+Section "InputDevice"
+    Identifier "Touchpad0"
+    Driver "evdev"
+    Option "Device" "$touchpad"
+    Option "GrabDevice" "false"
+EndSection
+EOFCONF
+
+exit 0

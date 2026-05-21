@@ -497,6 +497,112 @@ exec dbus-run-session -- startxfce4
 STARTXFCEEOF
 chmod +x /usr/local/bin/shimboot-startxfce
 
+cat > /usr/local/bin/shimboot-generate-xorg-conf << 'GENXORGEOF'
+#!/bin/sh
+
+# Generate an Xorg config that directly opens the Chromebook input event nodes.
+# This bypasses LightDM/logind/udev seat ACL problems.  The kernel already sees
+# the devices; we just tell Xorg exactly which /dev/input/event* files to use.
+
+out=/etc/X11/shimboot-xorg.conf
+log=/var/log/shimboot-xorg-input.log
+mkdir -p /etc/X11 /dev/input /var/log
+: > "$log"
+
+# Ensure event nodes exist even if udev did not make them yet. Event device minor
+# numbers are 64 + event number.
+if [ -r /proc/bus/input/devices ]; then
+    grep -o 'event[0-9][0-9]*' /proc/bus/input/devices | sort -u | while read -r ev; do
+        n="${ev#event}"
+        [ -e "/dev/input/$ev" ] || mknod -m 666 "/dev/input/$ev" c 13 "$((64 + n))" 2>/dev/null || true
+    done
+fi
+[ -e /dev/input/mice ] || mknod -m 666 /dev/input/mice c 13 63 2>/dev/null || true
+chmod a+rw /dev/input/event* /dev/input/mouse* /dev/input/mice 2>/dev/null || true
+
+find_event_by_name() {
+    pattern="$1"
+    awk -v pat="$pattern" '
+        BEGIN { RS=""; FS="\n"; IGNORECASE=1 }
+        $0 ~ pat {
+            for (i=1; i<=NF; i++) {
+                if ($i ~ /^H: Handlers=/) {
+                    n=split($i, a, " ")
+                    for (j=1; j<=n; j++) if (a[j] ~ /^event[0-9]+$/) { print "/dev/input/" a[j]; exit }
+                }
+            }
+        }
+    ' /proc/bus/input/devices 2>/dev/null
+}
+
+keyboard="$(find_event_by_name 'AT Translated Set 2 keyboard|cros_ec_keyb|Keyboard')"
+touchpad="$(find_event_by_name 'Elan Touchpad|Touchpad|ELAN|SYNA|Synaptics')"
+
+# Dedede fallback from collected logs: event2 keyboard, event5 Elan touchpad.
+[ -n "$keyboard" ] || keyboard=/dev/input/event2
+[ -n "$touchpad" ] || touchpad=/dev/input/event5
+
+{
+    echo "keyboard=$keyboard"
+    echo "touchpad=$touchpad"
+    echo "--- /proc/bus/input/devices ---"
+    cat /proc/bus/input/devices 2>/dev/null || true
+    echo "--- /dev/input ---"
+    ls -la /dev/input 2>/dev/null || true
+} >> "$log"
+
+cat > "$out" <<EOFCONF
+Section "ServerLayout"
+    Identifier "ShimbootLayout"
+    Screen 0 "Screen0" 0 0
+    InputDevice "Keyboard0" "CoreKeyboard"
+    InputDevice "Touchpad0" "CorePointer"
+EndSection
+
+Section "ServerFlags"
+    Option "AutoAddDevices" "false"
+    Option "AutoEnableDevices" "false"
+    Option "AllowEmptyInput" "false"
+EndSection
+
+Section "Device"
+    Identifier "Device0"
+    Driver "modesetting"
+    Option "AccelMethod" "none"
+EndSection
+
+Section "Monitor"
+    Identifier "Monitor0"
+EndSection
+
+Section "Screen"
+    Identifier "Screen0"
+    Device "Device0"
+    Monitor "Monitor0"
+EndSection
+
+Section "InputDevice"
+    Identifier "Keyboard0"
+    Driver "evdev"
+    Option "Device" "$keyboard"
+    Option "GrabDevice" "false"
+    Option "XkbRules" "evdev"
+    Option "XkbModel" "pc105"
+    Option "XkbLayout" "us"
+EndSection
+
+Section "InputDevice"
+    Identifier "Touchpad0"
+    Driver "evdev"
+    Option "Device" "$touchpad"
+    Option "GrabDevice" "false"
+EndSection
+EOFCONF
+
+exit 0
+GENXORGEOF
+chmod +x /usr/local/bin/shimboot-generate-xorg-conf
+
 # Keep Xorg auto device discovery enabled and provide explicit input catchalls.
 # Gentoo's OpenRC setup does not always grant the same logind ACLs as upstream
 # Debian, so also install udev rules that make input devices readable.
@@ -882,7 +988,7 @@ chmod +x /etc/init.d/xdm
 cat > /etc/init.d/shimboot-xfce << 'SHIMBOOTXFCEEOF'
 #!/sbin/openrc-run
 
-description="Start XFCE directly for shimboot"
+description="Start XFCE directly with forced Chromebook input"
 pidfile="/run/shimboot-xfce.pid"
 _log="/var/log/shimboot-xfce.log"
 _user="${SHIMBOOT_XFCE_USER:-user}"
@@ -900,15 +1006,8 @@ start() {
     chmod 1777 /tmp /tmp/.X11-unix 2>/dev/null || true
     rm -f /tmp/.X0-lock /tmp/.X11-unix/X0 2>/dev/null || true
 
-    # Match upstream shimboot/NixOS behavior: release frecon immediately before
-    # starting X, not earlier in boot.
     /usr/local/bin/kill_frecon >> "$_log" 2>&1 || true
-
-    # Match systemd/logind ACL behavior from upstream shimboot by ensuring X can
-    # read input devices under OpenRC.
-    mkdir -p /dev/input
-    chgrp -R input /dev/input 2>>"$_log" || true
-    chmod a+rw /dev/input/event* /dev/input/mouse* /dev/input/js* 2>>"$_log" || true
+    /usr/local/bin/shimboot-generate-xorg-conf >> "$_log" 2>&1 || true
 
     if [ ! -x /usr/bin/xinit ]; then
         echo "xinit is missing" >> "$_log"
@@ -918,12 +1017,7 @@ start() {
 
     (
         export SHIMBOOT_XFCE_USER="$_user"
-        if [ -x /usr/bin/openvt ]; then
-            exec /usr/bin/openvt -c 7 -f -- \
-                /usr/bin/xinit /usr/local/bin/shimboot-xinitrc -- :0 vt7 -ac -nolisten tcp >> "$_log" 2>&1
-        else
-            exec /usr/bin/xinit /usr/local/bin/shimboot-xinitrc -- :0 vt7 -ac -nolisten tcp >> "$_log" 2>&1
-        fi
+        exec /usr/bin/xinit /usr/local/bin/shimboot-xinitrc -- :0 -config /etc/X11/shimboot-xorg.conf -nolisten tcp >> "$_log" 2>&1
     ) &
     echo $! > "$pidfile"
 
@@ -945,26 +1039,24 @@ stop() {
 SHIMBOOTXFCEEOF
 chmod +x /etc/init.d/shimboot-xfce
 
-# Use the upstream shimboot model: a oneshot kill-frecon service runs before the
-# distro display manager, then the display manager starts X normally.
-rm -f /etc/runlevels/*/shimboot-lightdm /etc/runlevels/*/shimboot-xfce /etc/runlevels/*/shimboot-hwmods /etc/runlevels/*/shimboot-mdev /etc/runlevels/*/mdev /etc/runlevels/*/local 2>/dev/null || true
+# Use direct Xorg with an explicit generated input config. LightDM can start but
+# is not attaching the Chromebook event nodes on OpenRC; this bypasses logind and
+# udev seat matching entirely.
+rm -f /etc/runlevels/*/display-manager /etc/runlevels/*/xdm /etc/runlevels/*/kill-frecon /etc/runlevels/*/shimboot-lightdm /etc/runlevels/*/shimboot-hwmods /etc/runlevels/*/shimboot-mdev /etc/runlevels/*/mdev /etc/runlevels/*/local /etc/runlevels/*/shimboot-xfce 2>/dev/null || true
 rc-update add devfs sysinit 2>/dev/null || true
 [ -x /etc/init.d/hwdrivers ] && rc-update add hwdrivers sysinit 2>/dev/null || true
 for level in sysinit boot default nonetwork; do
   rc-update del mdev "$level" 2>/dev/null || true
   rc-update del shimboot-mdev "$level" 2>/dev/null || true
   rc-update del shimboot-hwmods "$level" 2>/dev/null || true
-  rc-update del shimboot-xfce "$level" 2>/dev/null || true
-  rc-update del shimboot-lightdm "$level" 2>/dev/null || true
   rc-update del local "$level" 2>/dev/null || true
+  rc-update del display-manager "$level" 2>/dev/null || true
+  rc-update del xdm "$level" 2>/dev/null || true
+  rc-update del kill-frecon "$level" 2>/dev/null || true
+  rc-update del shimboot-lightdm "$level" 2>/dev/null || true
 done
-rm -f /etc/runlevels/*/mdev /etc/runlevels/*/shimboot-mdev /etc/runlevels/*/shimboot-hwmods /etc/runlevels/*/shimboot-xfce /etc/runlevels/*/shimboot-lightdm /etc/runlevels/*/local 2>/dev/null || true
-rc-update add kill-frecon default 2>/dev/null || true
-if [ -x /etc/init.d/display-manager ]; then
-  rc-update add display-manager default 2>/dev/null || true
-else
-  rc-update add xdm default 2>/dev/null || true
-fi
+rm -f /etc/runlevels/*/display-manager /etc/runlevels/*/xdm /etc/runlevels/*/kill-frecon /etc/runlevels/*/shimboot-lightdm /etc/runlevels/*/shimboot-hwmods /etc/runlevels/*/shimboot-mdev /etc/runlevels/*/mdev /etc/runlevels/*/local 2>/dev/null || true
+rc-update add shimboot-xfce default 2>/dev/null || true
 
 # Configure LightDM
 print_info "Configuring LightDM..."

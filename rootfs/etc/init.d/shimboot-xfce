@@ -1,6 +1,6 @@
 #!/sbin/openrc-run
 
-description="Start XFCE directly for shimboot"
+description="Start XFCE directly with forced Chromebook input"
 pidfile="/run/shimboot-xfce.pid"
 _log="/var/log/shimboot-xfce.log"
 _user="${SHIMBOOT_XFCE_USER:-user}"
@@ -18,15 +18,8 @@ start() {
     chmod 1777 /tmp /tmp/.X11-unix 2>/dev/null || true
     rm -f /tmp/.X0-lock /tmp/.X11-unix/X0 2>/dev/null || true
 
-    # Match upstream shimboot/NixOS behavior: release frecon immediately before
-    # starting X, not earlier in boot.
     /usr/local/bin/kill_frecon >> "$_log" 2>&1 || true
-
-    # Match systemd/logind ACL behavior from upstream shimboot by ensuring X can
-    # read input devices under OpenRC.
-    mkdir -p /dev/input
-    chgrp -R input /dev/input 2>>"$_log" || true
-    chmod a+rw /dev/input/event* /dev/input/mouse* /dev/input/js* 2>>"$_log" || true
+    /usr/local/bin/shimboot-generate-xorg-conf >> "$_log" 2>&1 || true
 
     if [ ! -x /usr/bin/xinit ]; then
         echo "xinit is missing" >> "$_log"
@@ -36,12 +29,7 @@ start() {
 
     (
         export SHIMBOOT_XFCE_USER="$_user"
-        if [ -x /usr/bin/openvt ]; then
-            exec /usr/bin/openvt -c 7 -f -- \
-                /usr/bin/xinit /usr/local/bin/shimboot-xinitrc -- :0 vt7 -ac -nolisten tcp >> "$_log" 2>&1
-        else
-            exec /usr/bin/xinit /usr/local/bin/shimboot-xinitrc -- :0 vt7 -ac -nolisten tcp >> "$_log" 2>&1
-        fi
+        exec /usr/bin/xinit /usr/local/bin/shimboot-xinitrc -- :0 -config /etc/X11/shimboot-xorg.conf -nolisten tcp >> "$_log" 2>&1
     ) &
     echo $! > "$pidfile"
 
