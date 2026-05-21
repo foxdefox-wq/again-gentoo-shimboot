@@ -106,7 +106,6 @@ write_shimboot_fstab() {
 ${root_dev} / ${root_type} defaults,noatime 0 1
 proc /proc proc nosuid,nodev,noexec 0 0
 sysfs /sys sysfs nosuid,nodev,noexec 0 0
-devtmpfs /dev devtmpfs mode=0755,nosuid 0 0
 devpts /dev/pts devpts gid=5,mode=620,nosuid,noexec 0 0
 tmpfs /run tmpfs mode=0755,nosuid,nodev 0 0
 tmpfs /tmp tmpfs mode=1777,nosuid,nodev 0 0

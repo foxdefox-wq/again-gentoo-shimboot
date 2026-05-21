@@ -33,19 +33,38 @@ copy_modules() {
   fi
 
   mkdir -p "${target_rootfs}/lib/firmware"
-  cp -r --remove-destination "${shim_rootfs}/lib/firmware/"* "${target_rootfs}/lib/firmware/"
-  cp -r --remove-destination "${reco_rootfs}/lib/firmware/"* "${target_rootfs}/lib/firmware/"
+  cp -a --remove-destination "${shim_rootfs}/lib/firmware/." "${target_rootfs}/lib/firmware/" 2>/dev/null || true
+  cp -a --remove-destination "${reco_rootfs}/lib/firmware/." "${target_rootfs}/lib/firmware/" 2>/dev/null || true
+
+  # ChromeOS touch firmware commonly lives under /opt/google and /lib/firmware
+  # contains symlinks to it. Preserve those targets too.
+  mkdir -p "${target_rootfs}/opt"
+  if [ -d "${shim_rootfs}/opt/google" ]; then
+    mkdir -p "${target_rootfs}/opt/google"
+    cp -a "${shim_rootfs}/opt/google/." "${target_rootfs}/opt/google/" 2>/dev/null || true
+  fi
+  if [ -d "${reco_rootfs}/opt/google" ]; then
+    mkdir -p "${target_rootfs}/opt/google"
+    cp -a "${reco_rootfs}/opt/google/." "${target_rootfs}/opt/google/" 2>/dev/null || true
+  fi
 
   mkdir -p "${target_rootfs}/lib/modprobe.d/"
   mkdir -p "${target_rootfs}/etc/modprobe.d/"
   cp -r "${reco_rootfs}/lib/modprobe.d/"* "${target_rootfs}/lib/modprobe.d/" 2>/dev/null || true
   cp -r "${reco_rootfs}/etc/modprobe.d/"* "${target_rootfs}/etc/modprobe.d/" 2>/dev/null || true
 
-  # Preserve ChromeOS module-load hints. Gentoo's shimboot-hwmods service reads
-  # these and loads board-specific input/touchpad/touchscreen modules best-effort.
+  # Preserve ChromeOS module-load hints. Alpine shimboot copies these into
+  # /etc/modules for OpenRC's modules service, so do the same for Gentoo.
   mkdir -p "${target_rootfs}/etc/modules-load.d/"
   cp -r "${shim_rootfs}/etc/modules-load.d/"* "${target_rootfs}/etc/modules-load.d/" 2>/dev/null || true
   cp -r "${reco_rootfs}/etc/modules-load.d/"* "${target_rootfs}/etc/modules-load.d/" 2>/dev/null || true
+  rm -f "${target_rootfs}/etc/modules-load.d/shimboot-hardware.conf" 2>/dev/null || true
+  : > "${target_rootfs}/etc/modules"
+  for mod_file in "${target_rootfs}"/etc/modules-load.d/*.conf; do
+    [ -f "$mod_file" ] || continue
+    sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' "$mod_file" >> "${target_rootfs}/etc/modules"
+    echo >> "${target_rootfs}/etc/modules"
+  done
 
   #decompress kernel modules if necessary - debian won't recognize these otherwise
   local compressed_files="$(find "${target_rootfs}/lib/modules" -name '*.gz')"

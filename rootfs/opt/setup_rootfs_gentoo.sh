@@ -320,7 +320,6 @@ cat > /etc/fstab << 'FSTABEOF'
 /dev/root / ext4 defaults,noatime 0 1
 proc /proc proc nosuid,nodev,noexec 0 0
 sysfs /sys sysfs nosuid,nodev,noexec 0 0
-devtmpfs /dev devtmpfs mode=0755,nosuid 0 0
 devpts /dev/pts devpts gid=5,mode=620,nosuid,noexec 0 0
 tmpfs /run tmpfs mode=0755,nosuid,nodev 0 0
 tmpfs /tmp tmpfs mode=1777,nosuid,nodev 0 0
@@ -881,51 +880,17 @@ mkdir -p /etc/runlevels/boot 2>/dev/null || true
 mkdir -p /etc/runlevels/default 2>/dev/null || true
 mkdir -p /etc/runlevels/shutdown 2>/dev/null || true
 
-# Copy ChromeOS modules/firmware from /etc/modules-load.d to /etc/modules
+# OpenRC's modules service reads /etc/modules, not /etc/modules-load.d.
+# Match Alpine shimboot's approach: copy module-load hints into /etc/modules.
+# patch_rootfs.sh may append more ChromeOS board-specific hints after setup.
+: > /etc/modules
 if [ -d /etc/modules-load.d ]; then
   for mod_file in /etc/modules-load.d/*.conf; do
-    if [ -f "$mod_file" ]; then
-      cat "$mod_file" >> /etc/modules
-      echo >> /etc/modules
-    fi
+    [ -f "$mod_file" ] || continue
+    sed '/^[[:space:]]*#/d; /^[[:space:]]*$/d' "$mod_file" >> /etc/modules
+    echo >> /etc/modules
   done
 fi
-
-# Add a broad Chromebook input hardware module list for shimboot-hwmods.
-# Missing modules are tolerated; ChromeOS module-load hints copied later by
-# patch_rootfs.sh are loaded by shimboot-hwmods too.
-cat > /etc/modules-load.d/shimboot-hardware.conf << 'HWMODULESEOF'
-cros_ec
-cros_ec_lpcs
-cros_ec_i2c
-cros_ec_spi
-cros_ec_keyb
-cros_ec_buttons
-chromeos_laptop
-hid_generic
-usbhid
-hid_multitouch
-i2c_hid
-i2c_hid_acpi
-atmel_mxt_ts
-elants_i2c
-elan_i2c
-cyapa
-chromeos_acpi
-chromeos_tbmc
-cros_ec_dev
-cros_ec_chardev
-cros_ec_sensorhub
-hid_google_hammer
-i2c_hid_of
-raydium_i2c_ts
-goodix
-i8042
-atkbd
-psmouse
-serio_raw
-uinput
-HWMODULESEOF
 
 # Clean up. Avoid depclean in strict binpkg mode: if a dependency has no current
 # binpkg, a cleanup pass can turn a successful binary install into a source-build
