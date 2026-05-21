@@ -329,7 +329,6 @@ proc /proc proc nosuid,nodev,noexec 0 0
 sysfs /sys sysfs nosuid,nodev,noexec 0 0
 devtmpfs /dev devtmpfs mode=0755,nosuid 0 0
 devpts /dev/pts devpts gid=5,mode=620,nosuid,noexec 0 0
-tmpfs /run tmpfs mode=0755,nosuid,nodev 0 0
 tmpfs /tmp tmpfs mode=1777,nosuid,nodev 0 0
 FSTABEOF
 
@@ -496,7 +495,11 @@ chmod +x /usr/local/bin/shimboot-startxfce
 # Keep Xorg auto device discovery enabled and provide explicit input catchalls.
 # Gentoo's OpenRC setup does not always grant the same logind ACLs as upstream
 # Debian, so also install udev rules that make input devices readable.
-mkdir -p /etc/X11/xorg.conf.d /etc/udev/rules.d
+mkdir -p /etc/X11 /etc/X11/xorg.conf.d /etc/udev/rules.d
+cat > /etc/X11/Xwrapper.config << 'XWRAPPEREOF'
+allowed_users=anybody
+needs_root_rights=yes
+XWRAPPEREOF
 rm -f /etc/X11/xorg.conf.d/20-shimboot.conf 2>/dev/null || true
 cat > /etc/X11/xorg.conf.d/10-shimboot-serverflags.conf << 'SERVERFLAGSEOF'
 Section "ServerFlags"
