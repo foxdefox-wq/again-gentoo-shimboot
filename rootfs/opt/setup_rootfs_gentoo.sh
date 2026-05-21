@@ -320,12 +320,14 @@ SELINUXEOF
 print_info "Writing shimboot fstab..."
 mkdir -p /proc /sys /dev/pts /run /tmp
 chmod 1777 /tmp
+touch /etc/shimboot-use-devtmpfs
 cat > /etc/fstab << 'FSTABEOF'
 # shimboot-managed-fstab
 # The root device is mounted by the shimboot bootloader and rewritten at boot.
 /dev/root / ext4 defaults,noatime 0 1
 proc /proc proc nosuid,nodev,noexec 0 0
 sysfs /sys sysfs nosuid,nodev,noexec 0 0
+devtmpfs /dev devtmpfs mode=0755,nosuid 0 0
 devpts /dev/pts devpts gid=5,mode=620,nosuid,noexec 0 0
 tmpfs /run tmpfs mode=0755,nosuid,nodev 0 0
 tmpfs /tmp tmpfs mode=1777,nosuid,nodev 0 0

@@ -106,6 +106,7 @@ write_shimboot_fstab() {
 ${root_dev} / ${root_type} defaults,noatime 0 1
 proc /proc proc nosuid,nodev,noexec 0 0
 sysfs /sys sysfs nosuid,nodev,noexec 0 0
+devtmpfs /dev devtmpfs mode=0755,nosuid 0 0
 devpts /dev/pts devpts gid=5,mode=620,nosuid,noexec 0 0
 tmpfs /run tmpfs mode=0755,nosuid,nodev 0 0
 tmpfs /tmp tmpfs mode=1777,nosuid,nodev 0 0
@@ -114,13 +115,27 @@ EOF
 
 #from original bootstrap.sh
 move_mounts() {
-  local base_mounts="/sys /proc /dev"
   local newroot_mnt="$1"
+  local base_mounts="/sys /proc /dev"
+
+  # Gentoo/OpenRC needs a real devtmpfs in the new root. The initramfs /dev that
+  # frecon uses is tiny and can lack /dev/input, so moving it into Gentoo leaves
+  # X/LightDM with no keyboard/touchpad. Gentoo setup drops this marker.
+  if [ -f "$newroot_mnt/etc/shimboot-use-devtmpfs" ]; then
+    base_mounts="/sys /proc"
+  fi
+
   for mnt in $base_mounts; do
     # $mnt is a full path (leading '/'), so no '/' joiner
     mkdir -p "$newroot_mnt$mnt"
     mount -n -o move "$mnt" "$newroot_mnt$mnt"
   done
+
+  if [ -f "$newroot_mnt/etc/shimboot-use-devtmpfs" ]; then
+    mkdir -p "$newroot_mnt/dev" "$newroot_mnt/dev/pts" "$newroot_mnt/dev/shm"
+    mount -t devtmpfs devtmpfs "$newroot_mnt/dev" 2>/dev/null || true
+    mkdir -p "$newroot_mnt/dev/pts" "$newroot_mnt/dev/shm"
+  fi
 }
 
 print_license() {
