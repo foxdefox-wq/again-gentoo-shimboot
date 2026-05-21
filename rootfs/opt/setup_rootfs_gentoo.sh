@@ -455,14 +455,22 @@ cat > /usr/local/bin/shimboot-start-user-xfce << 'USERXFCEEOF'
 # session before X starts, which is what upstream Shimboot gets from
 # systemd+LightDM and what root-run OpenRC services do not provide.
 
-[ -n "$DISPLAY" ] && exit 0
-[ -e /tmp/.shimboot-x-started ] && exit 0
-touch /tmp/.shimboot-x-started
+[ -n "$DISPLAY" ] && exec /bin/bash --login
 
 log=/var/log/shimboot-user-xfce.log
-mkdir -p /var/log /tmp/.X11-unix
+lock=/run/shimboot-user-xfce.lock
+mkdir -p /run /var/log /tmp/.X11-unix
 chmod 1777 /tmp /tmp/.X11-unix 2>/dev/null || true
 
+# Do not exit if another instance exists; exiting makes sysvinit respawn tty1
+# rapidly and disables it for 5 minutes. Stay in a shell instead.
+if ! mkdir "$lock" 2>/dev/null; then
+    echo "shimboot-start-user-xfce: already running, opening shell" >>"$log"
+    exec /bin/bash --login
+fi
+trap 'rmdir "$lock" 2>/dev/null || true' EXIT INT TERM
+
+echo "$(date): preparing hardware/input" >>"$log"
 /usr/local/bin/shimboot-load-hwmods >>"$log" 2>&1 || true
 /usr/local/bin/kill_frecon >>"$log" 2>&1 || true
 
@@ -477,7 +485,12 @@ export XDG_RUNTIME_DIR="/run/user/$(id -u)"
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
 
-exec startx /usr/local/bin/shimboot-startxfce -- :0 vt7 -ac -nolisten tcp >>"$log" 2>&1
+echo "$(date): starting XFCE via startx" >>"$log"
+startx /usr/local/bin/shimboot-startxfce -- :0 vt7 -ac -nolisten tcp >>"$log" 2>&1
+rc=$?
+echo "$(date): startx exited with status $rc; leaving tty shell open to avoid respawn loop" >>"$log"
+
+exec /bin/bash --login
 USERXFCEEOF
 chmod +x /usr/local/bin/shimboot-start-user-xfce
 
@@ -1042,9 +1055,9 @@ chown "$username:$username" "/home/$username/.bash_profile" 2>/dev/null || true
 
 if [ -f /etc/inittab ]; then
   if grep -q '^c1:' /etc/inittab; then
-    sed -i "s#^c1:.*#c1:12345:respawn:/sbin/agetty --autologin $username --noclear 38400 tty1 linux#" /etc/inittab
+    sed -i "s#^c1:.*#c1:12345:once:/sbin/agetty --autologin $username --noclear 38400 tty1 linux#" /etc/inittab
   else
-    echo "c1:12345:respawn:/sbin/agetty --autologin $username --noclear 38400 tty1 linux" >> /etc/inittab
+    echo "c1:12345:once:/sbin/agetty --autologin $username --noclear 38400 tty1 linux" >> /etc/inittab
   fi
 fi
 
