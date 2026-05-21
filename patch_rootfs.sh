@@ -19,7 +19,18 @@ copy_modules() {
   local target_rootfs=$(realpath -m $3)
 
   rm -rf "${target_rootfs}/lib/modules"
-  cp -r "${shim_rootfs}/lib/modules" "${target_rootfs}/lib/modules"
+  mkdir -p "${target_rootfs}/lib/modules"
+
+  # Merge modules from both recovery and shim images. The recovery image often
+  # has the complete ChromeOS hardware driver set, while the shim can be more
+  # minimal. Input devices on Chromebooks (cros_ec keyboard, I2C-HID touchpads,
+  # touchscreens) may live only in the recovery module tree.
+  if [ -d "${reco_rootfs}/lib/modules" ]; then
+    cp -a "${reco_rootfs}/lib/modules/." "${target_rootfs}/lib/modules/" 2>/dev/null || true
+  fi
+  if [ -d "${shim_rootfs}/lib/modules" ]; then
+    cp -a "${shim_rootfs}/lib/modules/." "${target_rootfs}/lib/modules/" 2>/dev/null || true
+  fi
 
   mkdir -p "${target_rootfs}/lib/firmware"
   cp -r --remove-destination "${shim_rootfs}/lib/firmware/"* "${target_rootfs}/lib/firmware/"

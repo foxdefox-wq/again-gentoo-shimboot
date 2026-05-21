@@ -526,6 +526,15 @@ load_mod() {
     fi
 }
 
+# First let depmod aliases handle all real hardware described by sysfs. This is
+# the closest equivalent to ChromeOS coldplug and catches board-specific input
+# devices without knowing exact module names in advance.
+find /sys -name modalias -type f 2>/dev/null | while IFS= read -r alias_file; do
+    alias="$(cat "$alias_file" 2>/dev/null || true)"
+    [ -n "$alias" ] || continue
+    modprobe -q -b "$alias" >>"$log" 2>&1 || true
+done
+
 # Buses / pinctrl / low-power-subsystem glue used by Intel Chromebooks.
 for mod in \
     pinctrl_geminilake pinctrl_jasperlake pinctrl_cannonlake pinctrl_tigerlake \
@@ -537,20 +546,41 @@ done
 
 # ChromeOS Embedded Controller and Chromebook-specific input devices.
 for mod in \
-    cros_ec cros_ec_lpcs cros_ec_i2c cros_ec_spi cros_ec_proto \
-    cros_ec_keyb cros_ec_buttons cros_ec_sensors cros_usbpd_charger \
-    chromeos_laptop cros_kbd_led_backlight \
+    chromeos_acpi chromeos_laptop chromeos_pstore chromeos_tbmc \
+    cros_ec cros_ec_proto cros_ec_lpcs cros_ec_i2c cros_ec_spi cros_ec_uart \
+    cros_ec_dev cros_ec_chardev cros_ec_sysfs cros_ec_debugfs \
+    cros_ec_keyb cros_ec_buttons cros_ec_sensors cros_ec_sensors_core \
+    cros_ec_sensorhub cros_ec_light_prox cros_usbpd_charger cros_usbpd_logger \
+    cros_kbd_led_backlight \
     intel_hid intel_vbtn gpio_keys soc_button_array; do
     load_mod "$mod"
 done
 
 # HID/input/touchpad/touchscreen stack.
 for mod in \
-    hid hid_generic usbhid hid_multitouch \
-    i2c_hid i2c_hid_acpi \
-    atmel_mxt_ts elants_i2c elan_i2c cyapa \
-    i8042 atkbd psmouse serio_raw uinput evdev; do
+    input_core mousedev joydev evdev uinput \
+    hid hid_generic usbhid hid_multitouch hid_google_hammer \
+    i2c_hid i2c_hid_acpi i2c_hid_of \
+    atmel_mxt_ts elants_i2c elan_i2c cyapa raydium_i2c_ts goodix \
+    i8042 atkbd psmouse serio serio_raw; do
     load_mod "$mod"
+done
+
+# Load every module in the ChromeOS tree whose filename looks input/HID/I2C/EC
+# related. Some ChromeOS module names vary from upstream, so a static list is
+# not enough.
+for depfile in /lib/modules/"$(uname -r)"/modules.dep /lib/modules/"$(uname -r)"/modules.dep.bin; do
+    [ -f "$depfile" ] || continue
+    sed 's/:.*//' "$depfile" 2>/dev/null | while IFS= read -r path; do
+        base="${path##*/}"
+        mod="${base%%.ko*}"
+        case "$mod" in
+            *cros*|*chrome*|*ec*|*hid*|*i2c*|*elan*|*elants*|*atmel*|*mxt*|*cyapa*|*touch*|*kbd*|*keyb*|*input*|*serio*|*atkbd*|*psmouse*|*gpio*|*button*)
+                load_mod "$mod"
+                ;;
+        esac
+    done
+    break
 done
 
 # Load any copied ChromeOS module-load hints too, but keep this non-fatal.
@@ -562,10 +592,24 @@ for conf in /etc/modules-load.d/*.conf; do
     done < "$conf"
 done
 
+# Some ELAN touchpads bind to elan_i2c but only work through i2c_hid_acpi on
+# ChromeOS kernels. If those driver directories exist, try the harmless rebind.
+for dev in /sys/bus/i2c/drivers/elan_i2c/i2c-* /sys/bus/i2c/drivers/elants_i2c/i2c-*; do
+    [ -e "$dev" ] || continue
+    name="${dev##*/}"
+    driver="$(basename "$(dirname "$dev")")"
+    echo "$name" > "/sys/bus/i2c/drivers/$driver/unbind" 2>>"$log" || true
+    echo "$name" > /sys/bus/i2c/drivers/i2c_hid_acpi/bind 2>>"$log" || true
+done
+
 # Re-trigger device creation for input after the modules are present.
 udevadm trigger --subsystem-match=input --action=add >>"$log" 2>&1 || true
 udevadm trigger --subsystem-match=hid --action=add >>"$log" 2>&1 || true
+udevadm trigger --subsystem-match=i2c --action=add >>"$log" 2>&1 || true
 udevadm settle --timeout=10 >>"$log" 2>&1 || true
+
+ls -la /dev/input >>"$log" 2>&1 || true
+cat /proc/bus/input/devices >>"$log" 2>&1 || true
 
 exit 0
 HWMODSEOF
@@ -836,6 +880,15 @@ atmel_mxt_ts
 elants_i2c
 elan_i2c
 cyapa
+chromeos_acpi
+chromeos_tbmc
+cros_ec_dev
+cros_ec_chardev
+cros_ec_sensorhub
+hid_google_hammer
+i2c_hid_of
+raydium_i2c_ts
+goodix
 i8042
 atkbd
 psmouse
