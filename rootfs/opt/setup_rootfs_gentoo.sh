@@ -816,7 +816,6 @@ depend() {
 HWMODSSERVICEEOF
 chmod +x /etc/init.d/shimboot-hwmods
 rm -f /etc/runlevels/*/shimboot-hwmods 2>/dev/null || true
-rc-update add shimboot-hwmods default 2>/dev/null || true
 
 # Kill frecon helper service. It runs in the default runlevel immediately before
 # the display manager, not in boot, so the visible console is released only when
@@ -898,8 +897,8 @@ _log="/var/log/shimboot-xfce.log"
 _user="${SHIMBOOT_XFCE_USER:-user}"
 
 depend() {
-    need localmount dbus shimboot-hwmods
-    after bootmisc modules elogind shimboot-hwmods
+    need localmount dbus
+    after bootmisc modules elogind
     use elogind
 }
 
@@ -961,7 +960,8 @@ rm -f /etc/runlevels/*/display-manager /etc/runlevels/*/xdm /etc/runlevels/*/kil
 rc-update add devfs sysinit 2>/dev/null || true
 rc-update add mdev sysinit 2>/dev/null || true
 [ -x /etc/init.d/hwdrivers ] && rc-update add hwdrivers sysinit 2>/dev/null || true
-rc-update add shimboot-hwmods default 2>/dev/null || true
+rc-update del shimboot-hwmods default 2>/dev/null || true
+rm -f /etc/runlevels/*/shimboot-hwmods 2>/dev/null || true
 rc-update del shimboot-xfce default 2>/dev/null || true
 for level in boot default nonetwork; do
   rc-update del local "$level" 2>/dev/null || true
@@ -1092,13 +1092,6 @@ if [ -d /etc/modules-load.d ]; then
     echo >> /etc/modules
   done
 fi
-
-# Explicit OpenRC module config for ChromeOS input. This mirrors the manual
-# Gentoo/OpenRC fix and is intentionally small to avoid large boot spam.
-mkdir -p /etc/conf.d
-cat > /etc/conf.d/modules << 'CONFDMODULESEOF'
-modules="cros_ec_keyb i2c_hid i2c_hid_acpi elan_i2c hid_multitouch atmel_mxt_ts elants_i2c raydium_i2c_ts"
-CONFDMODULESEOF
 
 # Clean up. Avoid depclean in strict binpkg mode: if a dependency has no current
 # binpkg, a cleanup pass can turn a successful binary install into a source-build
