@@ -1,4 +1,4 @@
-#!/sbin/runscript
+#!/sbin/openrc-run
 # OpenRC init script to start X Display Manager (LightDM)
 # Required for Gentoo shimboot
 

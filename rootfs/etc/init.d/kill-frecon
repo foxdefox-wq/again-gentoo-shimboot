@@ -1,4 +1,4 @@
-#!/sbin/runscript
+#!/sbin/openrc-run
 # OpenRC init script for kill-frecon
 # Kills ChromeOS frecon processes that interfere with shimboot
 

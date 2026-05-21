@@ -385,14 +385,16 @@ for svc in mount-ro killprocs savecache; do
   [ -x "/etc/init.d/$svc" ] && rc-update add "$svc" shutdown 2>/dev/null || true
 done
 
-# Network. NetworkManager handles real networking; keep net.eth0 best-effort for
-# simple wired fallback without making boot depend on it.
+# NetworkManager handles networking. Do not add net.eth0: Chromebooks often do
+# not have an eth0 interface, and OpenRC's net.eth0 service blocks/errors on boot
+# when the interface is absent. Remove stale entries from older builds.
+for level in boot default nonetwork; do
+  rc-update del net.eth0 "$level" 2>/dev/null || true
+done
+rm -f /etc/init.d/net.eth0 2>/dev/null || true
 cat > /etc/conf.d/net << 'NETEOF'
-config_eth0="dhcp"
-dhcpcd_eth0="-t 10"
+# Managed by NetworkManager on shimboot Gentoo.
 NETEOF
-[ -e /etc/init.d/net.lo ] && ln -sf /etc/init.d/net.lo /etc/init.d/net.eth0 2>/dev/null || true
-[ -x /etc/init.d/net.eth0 ] && rc-update add net.eth0 default 2>/dev/null || true
 
 # Consolekit for LightDM if available
 [ -x /etc/init.d/consolekit ] && rc-update add consolekit boot 2>/dev/null || true
@@ -414,7 +416,7 @@ NETEOF
 
 # Kill frecon service
 cat > /etc/init.d/kill-frecon << 'FRECONEOF'
-#!/sbin/runscript
+#!/sbin/openrc-run
 description="Kill ChromeOS frecon processes"
 
 depend() {
@@ -430,11 +432,12 @@ start() {
 }
 FRECONEOF
 chmod +x /etc/init.d/kill-frecon
+rm -f /etc/runlevels/*/kill-frecon 2>/dev/null || true
 rc-update add kill-frecon boot 2>/dev/null || true
 
 # XDM service for LightDM
 cat > /etc/init.d/xdm << 'XDMEOF'
-#!/sbin/runscript
+#!/sbin/openrc-run
 description="X Display Manager (LightDM)"
 
 depend() {
@@ -460,6 +463,7 @@ stop() {
 }
 XDMEOF
 chmod +x /etc/init.d/xdm
+rm -f /etc/runlevels/*/xdm 2>/dev/null || true
 rc-update add xdm default 2>/dev/null || true
 
 # Configure LightDM
