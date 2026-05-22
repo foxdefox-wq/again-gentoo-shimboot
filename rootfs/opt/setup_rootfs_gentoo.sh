@@ -202,6 +202,7 @@ xfce-base/thunar udisks
 gnome-base/gvfs udisks udev
 # NetworkManager[wifi] requires wpa_supplicant[dbus]
 net-wireless/wpa_supplicant dbus
+net-misc/networkmanager wifi wext dhcpcd policykit elogind
 # gvfs/libsecret/gnome-keyring chain requires legacy gcr[gtk]
 app-crypt/gcr gtk
 USEEOF
@@ -435,14 +436,23 @@ NETEOF
 [ -x /etc/init.d/dbus ] && rc-update add dbus default 2>/dev/null || true
 
 # NetworkManager
+[ -x /etc/init.d/wpa_supplicant ] && rc-update add wpa_supplicant default 2>/dev/null || true
 [ -x /etc/init.d/NetworkManager ] && rc-update add NetworkManager default 2>/dev/null || true
-mkdir -p /etc/NetworkManager/conf.d
-cat > /etc/NetworkManager/conf.d/any-user.conf << 'NMEOF'
+mkdir -p /etc/NetworkManager/conf.d /etc/NetworkManager/system-connections
+cat > /etc/NetworkManager/conf.d/shimboot.conf << 'NMEOF'
 [main]
 auth-polkit=false
 hostname-mode=none
+plugins=keyfile
+
+[device]
+wifi.scan-rand-mac-address=no
+
+[ifupdown]
+managed=true
 NMEOF
 rfkill unblock all 2>/dev/null || true
+nmcli radio all on 2>/dev/null || true
 
 # Cron
 [ -x /etc/init.d/cronie ] && rc-update add cronie default 2>/dev/null || true
@@ -565,7 +575,6 @@ Section "ServerLayout"
     Screen 0 "Screen0" 0 0
     InputDevice "Keyboard0" "CoreKeyboard"
     InputDevice "Touchpad0" "CorePointer"
-    InputDevice "TouchpadEvdev" "SendCoreEvents"
 EndSection
 
 Section "ServerFlags"
@@ -602,22 +611,14 @@ EndSection
 
 Section "InputDevice"
     Identifier "Touchpad0"
-    Driver "synaptics"
+    Driver "libinput"
     Option "Device" "$touchpad"
-    Option "Protocol" "event"
-    Option "GrabEventDevice" "false"
-    Option "TapButton1" "1"
-    Option "TapButton2" "3"
-    Option "TapButton3" "2"
-    Option "VertTwoFingerScroll" "on"
-    Option "HorizTwoFingerScroll" "on"
-EndSection
-
-Section "InputDevice"
-    Identifier "TouchpadEvdev"
-    Driver "evdev"
-    Option "Device" "$touchpad"
-    Option "GrabDevice" "false"
+    Option "Tapping" "true"
+    Option "TappingDrag" "true"
+    Option "ClickMethod" "clickfinger"
+    Option "ScrollMethod" "twofinger"
+    Option "DisableWhileTyping" "false"
+    Option "AccelProfile" "adaptive"
 EndSection
 EOFCONF
 
